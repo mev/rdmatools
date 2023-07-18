@@ -99,8 +99,7 @@ cli_parse(int argc, char **argv, struct rdma_config* config)
 {
     // set default values
     config->function = RDMA_WRITE;
-printf("enum: %d\n", RDMA_WRITE);
-printf("config->function: %d\n", config->function);
+
     config->local_hostname = "";
     config->local_port = rand();
     config->remote_hostname = "";
@@ -135,11 +134,12 @@ main(int argc, char** argv)
 
     fprintf(stdout, "(RDMA_RECEIVER) [SECOND] remote RDMA metadata: ");
 
-    remote_sender_rdma_metadata = (char *)malloc(52);
-    memset(remote_sender_rdma_metadata, 0, 52);
+    // 52 characters for the string + 1 character for the new line, otherwise the getchar() misbehaves
+    remote_sender_rdma_metadata = (char *)malloc(53);
+    memset(remote_sender_rdma_metadata, 0, 53);
 
-    fgets(remote_sender_rdma_metadata, 52, stdin);
-    sscanf(remote_sender_rdma_metadata, "%0lx:%0lx:%0lx:%s", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.gid_string);
+    fgets(remote_sender_rdma_metadata, 53, stdin);
+    sscanf(remote_sender_rdma_metadata, "%0lx:%0lx:%0lx:%s\n", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.gid_string);
     wire_gid_to_gid(config.remote_endpoint.gid_string, &config.remote_endpoint.gid);
 
 	if (rdma_connect_ctx(config.rdma_ctx, 1, 0, config.mtu, &config.remote_endpoint, config.gidx, RDMA_RECEIVER)) {
@@ -149,20 +149,19 @@ main(int argc, char** argv)
 
     fprintf(stdout, "(RDMA_RECEIVER) [FOURTH] [Wait a little and then press ENTER to check the received data...]\n");
     getchar();
-printf("passt getch #1\n");
-    getchar();
-printf("passt getch #2\n");
 
-  int i, j;
+    // Print data in the reserved memory at the end of the write
+    int i, j;
 
-  printf("SUBSCRIBER: Buffer data:\n");
-//   i = config.message_count - 1;
-  for (i = 0; i < config.message_count; i++) {
-    for (j = 0; j < config.message_size; j++) {
-      printf("%d:", *(config.rdma_ctx->buf + i * config.message_size + j));
+    printf("SUBSCRIBER: Buffer data:\n");
+    // i = config.message_count - 1;
+    for (i = 0; i < config.message_count; i++) {
+        for (j = 0; j < config.message_size; j++) {
+        printf("%d:", *(config.rdma_ctx->buf + i * config.message_size + j));
+        }
     }
-  }
-  printf("\nDONE\n");
+    printf("\nDONE\n");
+    // End of data check
 
 	if (rdma_close_ctx(config.rdma_ctx)) {
         fprintf(stderr, "main: Failed to clean up before exiting.\n");

@@ -124,26 +124,26 @@ main(int argc, char** argv)
     fprintf(stdout, "(RDMA_SENDER) [FIRST] remote RDMA metadata: ");
 
     if (config.function == RDMA_WRITE) {
-        remote_receiver_rdma_metadata = (char *)malloc(78);
-        memset(remote_receiver_rdma_metadata, 0, 78);
+        // 78 characters for the string + 1 character for the new line, otherwise the getchar() misbehaves
+        remote_receiver_rdma_metadata = (char *)malloc(79);
+        memset(remote_receiver_rdma_metadata, 0, 79);
 
-        fgets(remote_receiver_rdma_metadata, 78, stdin);
-        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%08x:%016lx:%s", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.rkey, &config.remote_endpoint.addr, &config.remote_endpoint.gid_string);
+        fgets(remote_receiver_rdma_metadata, 79, stdin);
+        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%08x:%016lx:%s\n", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.rkey, &config.remote_endpoint.addr, &config.remote_endpoint.gid_string);
         wire_gid_to_gid(config.remote_endpoint.gid_string, &config.remote_endpoint.gid);
     } else {
-        remote_receiver_rdma_metadata = (char *)malloc(52);
-        memset(remote_receiver_rdma_metadata, 0, 52);
+        // 52 characters for the string + 1 character for the new line, otherwise the getchar() misbehaves
+        remote_receiver_rdma_metadata = (char *)malloc(53);
+        memset(remote_receiver_rdma_metadata, 0, 53);
 
-        fgets(remote_receiver_rdma_metadata, 52, stdin);
-        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%s", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.gid_string);
+        fgets(remote_receiver_rdma_metadata, 53, stdin);
+        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%s\n", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.gid_string);
         wire_gid_to_gid(config.remote_endpoint.gid_string, &config.remote_endpoint.gid);
     }
 
     fprintf(stdout, "(RDMA_SENDER) [THIRD] [Press ENTER to connect to receiver, send data and then go check the receiver]");
     getchar();
-printf("passt getch #1\n");
-    getchar();
-printf("passt getch #2\n");
+
 	if (rdma_connect_ctx(config.rdma_ctx, 1, config.local_endpoint.psn, config.mtu, &config.remote_endpoint, config.gidx, RDMA_SENDER)) {
         fprintf(stderr, "main: Failed to connect to remote RDMA endpoint (subscriber).\n");
         exit(0);
