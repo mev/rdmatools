@@ -21,10 +21,14 @@ C_FILES_SENDER_TCPIP=src/apps/rdma_sender_sw_tcpip.c
 OBJ_FILES_SENDER_TCPIP=$(C_FILES_SENDER_TCPIP:.c=.o)
 C_FILES_RECEIVER_TCPIP=src/apps/rdma_receiver_sw_tcpip.c
 OBJ_FILES_RECEIVER_TCPIP=$(C_FILES_RECEIVER_TCPIP:.c=.o)
+C_FILES_SENDER_TCPIP_FULL=src/apps/rdma_sender_sw_tcpip_full.c
+OBJ_FILES_SENDER_TCPIP_FULL=$(C_FILES_SENDER_TCPIP_FULL:.c=.o)
+C_FILES_RECEIVER_TCPIP_FULL=src/apps/rdma_receiver_sw_tcpip_full.c
+OBJ_FILES_RECEIVER_TCPIP_FULL=$(C_FILES_RECEIVER_TCPIP_FULL:.c=.o)
 
 # Targets
 .PHONY: all
-all: rdma_sender_sw_manual rdma_receiver_sw_manual rdma_sender_sw_tcpip rdma_receiver_sw_tcpip
+all: rdma_sender_sw_manual rdma_receiver_sw_manual rdma_sender_sw_tcpip rdma_receiver_sw_tcpip rdma_sender_sw_tcpip_full rdma_receiver_sw_tcpip_full
 
 rdma_sender_sw_manual: $(OBJ_FILES) $(OBJ_FILES_SENDER_MANUAL)
 	$(CC) $(FLAGS) $(LINK_FLAGS) $^ -o $@ $(LINK_LIBRARIES)
@@ -38,6 +42,12 @@ rdma_sender_sw_tcpip: $(OBJ_FILES) $(OBJ_FILES_SENDER_TCPIP)
 rdma_receiver_sw_tcpip: $(OBJ_FILES) $(OBJ_FILES_RECEIVER_TCPIP)
 	$(CC) $(FLAGS) $(LINK_FLAGS) $^ -o $@ $(LINK_LIBRARIES)
 
+rdma_sender_sw_tcpip_full: $(OBJ_FILES) $(OBJ_FILES_SENDER_TCPIP_FULL)
+	$(CC) $(FLAGS) $(LINK_FLAGS) $^ -o $@ $(LINK_LIBRARIES)
+
+rdma_receiver_sw_tcpip_full: $(OBJ_FILES) $(OBJ_FILES_RECEIVER_TCPIP_FULL)
+	$(CC) $(FLAGS) $(LINK_FLAGS) $^ -o $@ $(LINK_LIBRARIES)
+
 clean:
-	rm -rf $(OBJ_FILES) $(OBJ_FILES_SENDER_MANUAL) $(OBJ_FILES_RECEIVER_MANUAL) $(OBJ_FILES_SENDER_TCPIP) $(OBJ_FILES_RECEIVER_TCPIP)
-	rm -rf rdma_sender_sw_manual rdma_receiver_sw_manual rdma_sender_sw_tcpip rdma_receiver_sw_tcpip
+	rm -rf $(OBJ_FILES) $(OBJ_FILES_SENDER_MANUAL) $(OBJ_FILES_RECEIVER_MANUAL) $(OBJ_FILES_SENDER_TCPIP) $(OBJ_FILES_RECEIVER_TCPIP) $(OBJ_FILES_SENDER_TCPIP_FULL) $(OBJ_FILES_RECEIVER_TCPIP_FULL)
+	rm -rf rdma_sender_sw_manual rdma_receiver_sw_manual rdma_sender_sw_tcpip rdma_receiver_sw_tcpip rdma_sender_sw_tcpip_full rdma_receiver_sw_tcpip_full
