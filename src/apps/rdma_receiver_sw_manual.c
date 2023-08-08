@@ -34,14 +34,14 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
 
     case 'M':
-        cfg->message_count = strtol(arg, &end, 0);
+        *(cfg->message_count) = strtol(arg, &end, 0);
         if (end == arg) {
             argp_error(state, "'%s' is not a number", arg);
         }
         break;
 
     case 'S':
-        cfg->message_size = strtol(arg, &end, 0);
+        *(cfg->message_size) = strtol(arg, &end, 0);
         if (end == arg) {
             argp_error(state, "'%s' is not a number", arg);
         }
@@ -97,6 +97,13 @@ static struct argp argp = { options, parse_opt, args_doc, doc };
 void
 cli_parse(int argc, char **argv, struct rdma_config* config)
 {
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME, &now) == -1) {
+        srand(time(NULL));
+    } else {
+        srand((int)now.tv_nsec);
+    }
+
     // set default values
     config->function = RDMA_WRITE;
 
@@ -109,8 +116,19 @@ cli_parse(int argc, char **argv, struct rdma_config* config)
     config->gidx = 5;
     config->mtu = IBV_MTU_1024;
 
-    config->message_count = 10;
-    config->message_size = 1024;
+    config->remote_count = 1;
+
+    config->local_endpoint = (struct rdma_endpoint **)calloc(config->remote_count, sizeof(struct rdma_endpoint *));
+    *(config->local_endpoint) = (struct rdma_endpoint *)malloc(sizeof(struct rdma_endpoint));
+    config->remote_endpoint = (struct rdma_endpoint **)calloc(config->remote_count, sizeof(struct rdma_endpoint *));
+    *(config->remote_endpoint) = (struct rdma_endpoint *)malloc(sizeof(struct rdma_endpoint));
+
+    config->message_count = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
+    *(config->message_count) = 10;
+    config->message_size = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
+    *(config->message_size) = 1024;
+    config->buffer_size = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
+    *(config->buffer_size) = *(config->message_count) * *(config->message_size);
 
     // parse arguments
     argp_parse(&argp, argc, argv, 0, 0, config);
@@ -119,8 +137,8 @@ cli_parse(int argc, char **argv, struct rdma_config* config)
 int
 main(int argc, char** argv)
 {
+    char **local_receiver_rdma_metadata;
     char *remote_sender_rdma_metadata;
-    char *local_receiver_rdma_metadata;
 
 
     cli_parse(argc, argv, &config);
@@ -128,9 +146,9 @@ main(int argc, char** argv)
     local_receiver_rdma_metadata = rdma_prepare(&config, RDMA_RECEIVER);
     if (local_receiver_rdma_metadata == NULL) {
         fprintf(stderr, "main: Failed to initialize RDMA and get the receiver RDMA metadata.\n");
-        exit(0);
+        exit(1);
     }
-    fprintf(stdout, "(RDMA_RECEIVER) local RDMA metadata: %s\n", local_receiver_rdma_metadata);
+    fprintf(stdout, "(RDMA_RECEIVER) local RDMA metadata: %s\n", *local_receiver_rdma_metadata);
 
     fprintf(stdout, "(RDMA_RECEIVER) [SECOND] remote RDMA metadata: ");
 
@@ -139,12 +157,12 @@ main(int argc, char** argv)
     memset(remote_sender_rdma_metadata, 0, 53);
 
     fgets(remote_sender_rdma_metadata, 53, stdin);
-    sscanf(remote_sender_rdma_metadata, "%0lx:%0lx:%0lx:%s\n", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.gid_string);
-    wire_gid_to_gid(config.remote_endpoint.gid_string, &config.remote_endpoint.gid);
+    sscanf(remote_sender_rdma_metadata, "%0lx:%0lx:%0lx:%s\n", &((*(config.remote_endpoint))->lid), &((*(config.remote_endpoint))->qpn), &((*(config.remote_endpoint))->psn), &((*(config.remote_endpoint))->gid_string));
+    wire_gid_to_gid((*(config.remote_endpoint))->gid_string, &((*(config.remote_endpoint))->gid));
 
-	if (rdma_connect_ctx(config.rdma_ctx, 1, 0, config.mtu, &config.remote_endpoint, config.gidx, RDMA_RECEIVER)) {
+	if (rdma_connect_ctx(config.rdma_ctx, 1, config.mtu, config.local_endpoint, config.remote_endpoint, config.remote_count, config.gidx, RDMA_RECEIVER)) {
         fprintf(stderr, "main:  Failed to connect to remote RDMA endpoint (provider).\n");
-        exit(0);
+        exit(1);
 	}
 
     fprintf(stdout, "(RDMA_RECEIVER) [FOURTH] [Wait a little and then press ENTER to check the received data...]\n");
@@ -155,15 +173,15 @@ main(int argc, char** argv)
 
     printf("SUBSCRIBER: Buffer data:\n");
     // i = config.message_count - 1;
-    for (i = 0; i < config.message_count; i++) {
-        for (j = 0; j < config.message_size; j++) {
-        printf("%d:", *(config.rdma_ctx->buf + i * config.message_size + j));
+    for (i = 0; i < *(config.message_count); i++) {
+        for (j = 0; j < *(config.message_size); j++) {
+        printf("%d:", *(*(config.rdma_ctx->buf) + i * *(config.message_size) + j));
         }
     }
     printf("\nDONE\n");
     // End of data check
 
-	if (rdma_close_ctx(config.rdma_ctx)) {
+	if (rdma_close_ctx(config.rdma_ctx, config.remote_count)) {
         fprintf(stderr, "main: Failed to clean up before exiting.\n");
 	}
 }

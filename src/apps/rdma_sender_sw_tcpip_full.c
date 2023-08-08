@@ -34,14 +34,14 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
 
     case 'M':
-        cfg->message_count = strtol(arg, &end, 0);
+        *(cfg->message_count) = strtol(arg, &end, 0);
         if (end == arg) {
             argp_error(state, "'%s' is not a number", arg);
         }
         break;
 
     case 'S':
-        cfg->message_size = strtol(arg, &end, 0);
+        *(cfg->message_size) = strtol(arg, &end, 0);
         if (end == arg) {
             argp_error(state, "'%s' is not a number", arg);
         }
@@ -98,8 +98,21 @@ cli_parse(int argc, char **argv, struct rdma_config* config)
     config->gidx = 5;
     config->mtu = IBV_MTU_1024;
 
-    config->message_count = 10;
-    config->message_size = 1024;
+    config->remote_count = 1;
+
+    config->local_endpoint = (struct rdma_endpoint **)calloc(config->remote_count, sizeof(struct rdma_endpoint *));
+    *(config->local_endpoint) = (struct rdma_endpoint *)malloc(sizeof(struct rdma_endpoint));
+    config->remote_endpoint = (struct rdma_endpoint **)calloc(config->remote_count, sizeof(struct rdma_endpoint *));
+    *(config->remote_endpoint) = (struct rdma_endpoint *)malloc(sizeof(struct rdma_endpoint));
+
+    config->message_count = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
+    *(config->message_count) = 10;
+    config->message_size = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
+    *(config->message_size) = 1024;
+    config->buffer_size = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
+    *(config->buffer_size) = *(config->message_count) * *(config->message_size);
+    config->mem_offset = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
+    *(config->mem_offset) = 0;
 
     // parse arguments
     argp_parse(&argp, argc, argv, 0, 0, config);
@@ -108,7 +121,7 @@ cli_parse(int argc, char **argv, struct rdma_config* config)
 int
 main(int argc, char** argv)
 {
-    char *local_sender_rdma_metadata;
+    char **local_sender_rdma_metadata;
     char *remote_receiver_rdma_metadata;
 
 
@@ -119,7 +132,7 @@ main(int argc, char** argv)
         fprintf(stderr, "main: Failed to initialize RDMA and get the sender RDMA metadata.\n");
         exit(1);
     }
-    fprintf(stdout, "(RDMA_SENDER) local RDMA metadata: %s\n", local_sender_rdma_metadata);
+    fprintf(stdout, "(RDMA_SENDER) local RDMA metadata: %s\n", *local_sender_rdma_metadata);
 
     // establish TCP/IP connection
     int s, c, len, flag = 1;
@@ -161,10 +174,10 @@ main(int argc, char** argv)
     // accept the data from client
     c = accept(s, (struct sockaddr *)&c_in, &len);
     if (c < 0) {
-        fprintf(stderr, "main: Server acccept failed.\n");
+        fprintf(stderr, "main: Server accept failed.\n");
         exit(1);
     } else {
-        fprintf(stdout, "main: Server acccepted client.\n");
+        fprintf(stdout, "main: Server accepted client.\n");
     }
         
     // exchange data
@@ -173,30 +186,30 @@ main(int argc, char** argv)
         memset(remote_receiver_rdma_metadata, 0, 78);
 
         read(c, remote_receiver_rdma_metadata, 78);
-        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%08x:%016lx:%s", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.rkey, &config.remote_endpoint.addr, &config.remote_endpoint.gid_string);
-        wire_gid_to_gid(config.remote_endpoint.gid_string, &config.remote_endpoint.gid);
+        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%08x:%016lx:%s", &((*(config.remote_endpoint))->lid), &((*(config.remote_endpoint))->qpn), &((*(config.remote_endpoint))->psn), &((*(config.remote_endpoint))->rkey), &((*(config.remote_endpoint))->addr), &((*(config.remote_endpoint))->gid_string));
+        wire_gid_to_gid((*(config.remote_endpoint))->gid_string, &((*(config.remote_endpoint))->gid));
     } else {
         remote_receiver_rdma_metadata = (char *)malloc(52);
         memset(remote_receiver_rdma_metadata, 0, 52);
 
         read(c, remote_receiver_rdma_metadata, 52);
-        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%s", &config.remote_endpoint.lid, &config.remote_endpoint.qpn, &config.remote_endpoint.psn, &config.remote_endpoint.gid_string);
-        wire_gid_to_gid(config.remote_endpoint.gid_string, &config.remote_endpoint.gid);
+        sscanf(remote_receiver_rdma_metadata, "%0lx:%0lx:%0lx:%s", &((*(config.remote_endpoint))->lid), &((*(config.remote_endpoint))->qpn), &((*(config.remote_endpoint))->psn), &((*(config.remote_endpoint))->gid_string));
+        wire_gid_to_gid((*(config.remote_endpoint))->gid_string, &((*(config.remote_endpoint))->gid));
     }
 
     fprintf(stdout, "(RDMA_SENDER) [FIRST] remote RDMA metadata: %s\n", remote_receiver_rdma_metadata);
 
-    write(c, local_sender_rdma_metadata, 52);
+    write(c, *local_sender_rdma_metadata, 52);
 
     // fprintf(stdout, "(RDMA_SENDER) [THIRD] [Press ENTER to connect to receiver, send data and then go check the receiver]");
     // getchar();
 
-	if (rdma_connect_ctx(config.rdma_ctx, 1, config.local_endpoint.psn, config.mtu, &config.remote_endpoint, config.gidx, RDMA_SENDER)) {
+	if (rdma_connect_ctx(config.rdma_ctx, 1, config.mtu, config.local_endpoint, config.remote_endpoint, config.remote_count, config.gidx, RDMA_SENDER)) {
         fprintf(stderr, "main: Failed to connect to remote RDMA endpoint (subscriber).\n");
         exit(1);
 	}
 
-    if (rdma_post_send(config.rdma_ctx, &config.remote_endpoint, config.message_count, config.message_size) < config.message_count) {
+    if (rdma_post_send(config.rdma_ctx, config.remote_endpoint, config.message_count, config.message_size, config.mem_offset, config.remote_count) < 0) {
         fprintf(stderr, "main: Failed to post writes.\n");
         exit(1);
     }
@@ -204,7 +217,7 @@ main(int argc, char** argv)
     char buf[32];
     write(s, "DONE", 32);
 
-	if (rdma_close_ctx(config.rdma_ctx)) {
+	if (rdma_close_ctx(config.rdma_ctx, config.remote_count)) {
         fprintf(stderr, "main: Failed to clean up before exiting.\n");
 	}
 }

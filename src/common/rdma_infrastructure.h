@@ -4,6 +4,8 @@
 #include <argp.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,11 +36,11 @@ enum rdma_function {
 struct rdma_context {
     struct ibv_context *context;
     struct ibv_pd *pd;
-    struct ibv_mr *mr;
-    struct ibv_cq *cq;
-    struct ibv_qp *qp;
-    char *buf;
-    unsigned long size;
+    struct ibv_mr **mr;
+    struct ibv_cq **cq;
+    struct ibv_qp **qp;
+    char **buf;
+    unsigned long *size;
     int send_flags;
     struct ibv_port_attr portinfo;
 };
@@ -51,6 +53,34 @@ struct rdma_endpoint {
     uint64_t addr;
     char gid_string[32];
     union ibv_gid gid;
+};
+
+struct rdma_thread_param {
+    struct rdma_context *rdma_ctx;
+    unsigned ctx_index;
+
+    struct rdma_endpoint *remote_endpoint;
+
+    unsigned long message_count;
+    unsigned long message_size;
+    unsigned long buffer_size;
+    unsigned long mem_offset;
+    unsigned long used_size;
+    unsigned long received_size;
+
+    int control_socket;
+    unsigned int backpressure;
+    unsigned int backpressure_threshold_up;
+    unsigned int backpressure_threshold_down;
+
+    sem_t *sem_recv_data;
+
+    int stream;
+};
+
+struct rdma_backpressure_thread_param {
+    int sender_thread_socket;
+    unsigned int backpressure;
 };
 
 struct rdma_config {
@@ -70,11 +100,15 @@ struct rdma_config {
     struct ibv_device *ib_dev;
 
     struct rdma_context *rdma_ctx;
-    struct rdma_endpoint local_endpoint;
-    struct rdma_endpoint remote_endpoint;
+    struct rdma_endpoint **local_endpoint;
+    struct rdma_endpoint **remote_endpoint;
 
-    unsigned long message_count;
-    unsigned long message_size;
+    unsigned long *message_count;
+    unsigned long *message_size;
+    unsigned long *buffer_size;
+    unsigned long *mem_offset;
+
+    unsigned remote_count; // = <client count> on sender and = 1 on receiver
 };
 
 
@@ -82,11 +116,14 @@ int rdma_get_port_info(struct ibv_context *context, int port, struct ibv_port_at
 void wire_gid_to_gid(const char *wgid, union ibv_gid *gid);
 void gid_to_wire_gid(const union ibv_gid *gid, char wgid[]);
 
-char * rdma_prepare(struct rdma_config *config, int role);
-struct rdma_context * rdma_init_ctx(struct ibv_device *ib_dev, unsigned long message_count, unsigned long message_size, int port, int role);
-int rdma_connect_ctx(struct rdma_context *ctx, int port, int local_psn, enum ibv_mtu mtu, struct rdma_endpoint *remote_endpoint, int sgid_idx, int role);
-int rdma_close_ctx(struct rdma_context *ctx);
+char ** rdma_prepare(struct rdma_config *config, int role);
+struct rdma_context * rdma_init_ctx(struct ibv_device *ib_dev, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned count, int port, int role);
+int rdma_connect_ctx(struct rdma_context *ctx, int port, enum ibv_mtu mtu, struct rdma_endpoint **local_endpoint, struct rdma_endpoint **remote_endpoint, unsigned count, int sgid_idx, int role);
+int rdma_close_ctx(struct rdma_context *ctx, unsigned count);
 
-int rdma_post_send(struct rdma_context *ctx, struct rdma_endpoint *remote_endpoint, unsigned long message_count, unsigned long message_size);
+int rdma_post_send(struct rdma_context *ctx, struct rdma_endpoint **remote_endpoint, unsigned long *message_count, unsigned long *message_size, unsigned long *mem_offset, unsigned count);
+int rdma_post_send_mt(struct rdma_context *ctx, struct rdma_endpoint **remote_endpoint, unsigned long *message_count, unsigned long *message_size, unsigned long *mem_offset, unsigned count);
+int rdma_post_send_mt_stream(int *control_socket_list, struct rdma_context *ctx, struct rdma_endpoint **remote_endpoint, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset, unsigned count);
+int rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset);
 
 #endif /* RDMA_INFRASTRUCTURE_H */
