@@ -23,6 +23,12 @@
 
 // #define RDMA_MAX_SEND_WR (32)
 // #define RDMA_MAX_RECV_WR (32)
+// #define RDMA_MAX_SEND_WR (64)
+// #define RDMA_MAX_RECV_WR (64)
+// #define RDMA_MAX_SEND_WR (128)
+// #define RDMA_MAX_RECV_WR (128)
+// #define RDMA_MAX_SEND_WR (160)
+// #define RDMA_MAX_RECV_WR (160)
 #define RDMA_MAX_SEND_WR (8192)
 #define RDMA_MAX_RECV_WR (8192)
 

@@ -9,6 +9,7 @@ static struct argp_option options[] = {
     {"ib-gid-index", 'i', "IBGIDX", 0, "IB GID index (e.g. 5)"},
     {"message-count", 'M', "MCOUNT", 0, "RDMA message count to be received"},
     {"message-size", 'S', "MSIZE", 0, "RDMA message size to be received"},
+    {"buffer-size", 'B', "BSIZE", 0, "Size of the memory buffer which will store the received RDMA messages"},
     {"client-count", 'C', "CCOUNT", 0, "Number of clients expected to connect"},
     { 0 }
 };
@@ -55,6 +56,13 @@ parse_opt(int key, char *arg, struct argp_state *state)
 
         for (i = 1; i < cfg->remote_count; i++) {
             *(cfg->message_size + i) = *(cfg->message_size);
+        }
+        break;
+
+    case 'B':
+        *(cfg->buffer_size) = strtol(arg, &end, 0);
+        if (end == arg) {
+            argp_error(state, "'%s' is not a number", arg);
         }
         break;
 

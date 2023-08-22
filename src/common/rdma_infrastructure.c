@@ -182,8 +182,10 @@ rdma_init_ctx(struct ibv_device *ib_dev, unsigned long *message_count, unsigned 
     }
     for (i = 0; i < count; i++) {
         if (role == RDMA_SENDER) {
+            printf("message_count: %d, message_size: %d\n", *(message_count + i), *(message_size + i));
             *(ctx->size + i) = *(message_count + i) * *(message_size + i);
         } else {
+            printf("buffer_size: %d\n", *(buffer_size + i));
             *(ctx->size + i) = *(buffer_size + i);
         }
     }
@@ -966,6 +968,10 @@ client_thread(void *arg)
 
             debug_print("t1:%d:%ld:%lu\n", thread_args->client_id, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
 
+            if (!thread_args->stream) {
+                break;
+            }
+
             thread_args->mem_offset += chunk_size;
             thread_args->mem_offset %= thread_args->buffer_size;
             // debug_print("(RDMA_SEND_MT_STREAM) buffer size: %d\n", thread_args->buffer_size);
@@ -990,7 +996,9 @@ client_thread(void *arg)
             //     }
             // }
             // pthread_mutex_unlock(notification_thread_args->notification_mutex);
-            sem_post(notification_thread_args->sem_send_data);
+            if (thread_args->stream) {
+                sem_post(notification_thread_args->sem_send_data);
+            }
 
             // try #1
             // bzero(buf, 32);
@@ -1048,6 +1056,7 @@ rdma_post_send_mt(struct rdma_context *ctx, struct rdma_endpoint **remote_endpoi
         (thread_arg_list + i)->buffer_size = *(message_count + i) * *(message_size + i);
         (thread_arg_list + i)->mem_offset = *(mem_offset + i);
 
+        (thread_arg_list + i)->client_id = i;
         (thread_arg_list + i)->stream = 0;
     }
 

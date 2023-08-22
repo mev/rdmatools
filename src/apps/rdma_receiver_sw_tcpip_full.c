@@ -9,6 +9,7 @@ static struct argp_option options[] = {
     {"ib-gid-index", 'i', "IBGIDX", 0, "IB GID index (e.g. 5)"},
     {"message-count", 'M', "MCOUNT", 0, "RDMA message count to be received"},
     {"message-size", 'S', "MSIZE", 0, "RDMA message size to be received"},
+    {"buffer-size", 'B', "BSIZE", 0, "Size of the memory buffer which will store the received RDMA messages"},
     { 0 }
 };
 
@@ -42,6 +43,13 @@ parse_opt(int key, char *arg, struct argp_state *state)
 
     case 'S':
         *(cfg->message_size) = strtol(arg, &end, 0);
+        if (end == arg) {
+            argp_error(state, "'%s' is not a number", arg);
+        }
+        break;
+
+    case 'B':
+        *(cfg->buffer_size) = strtol(arg, &end, 0);
         if (end == arg) {
             argp_error(state, "'%s' is not a number", arg);
         }
@@ -127,6 +135,7 @@ cli_parse(int argc, char **argv, struct rdma_config* config)
     *(config->message_count) = 10;
     config->message_size = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
     *(config->message_size) = 1024;
+    // TODO: This default is less than useful. It needs to be recomputed based on the provided values for message_count and message_size.
     config->buffer_size = (unsigned long *)calloc(config->remote_count, sizeof(unsigned long));
     *(config->buffer_size) = *(config->message_count) * *(config->message_size);
 
@@ -206,16 +215,16 @@ main(int argc, char** argv)
     } while (strcmp(buf, "DONE") == 0);
 
     // Print data in the reserved memory at the end of the write
-    int i, j;
+    // int i, j;
 
-    printf("SUBSCRIBER: Buffer data:\n");
-    // i = config.message_count - 1;
-    for (i = 0; i < *(config.message_count); i++) {
-        for (j = 0; j < *(config.message_size); j++) {
-            printf("%d:", *(*(config.rdma_ctx->buf) + i * *(config.message_size) + j));
-        }
-    }
-    printf("\nDONE\n");
+    // printf("SUBSCRIBER: Buffer data:\n");
+    // // i = config.message_count - 1;
+    // for (i = 0; i < *(config.message_count); i++) {
+    //     for (j = 0; j < *(config.message_size); j++) {
+    //         printf("%d:", *(*(config.rdma_ctx->buf) + i * *(config.message_size) + j));
+    //     }
+    // }
+    // printf("\nDONE\n");
     // End of data check
 
 	if (rdma_close_ctx(config.rdma_ctx, config.remote_count)) {
