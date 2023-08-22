@@ -4,12 +4,16 @@
 #include <argp.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/timerfd.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <endian.h>
@@ -17,10 +21,10 @@
 
 #define debug_print(fmt, ...) do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
-#define RDMA_MAX_SEND_WR (32)
-#define RDMA_MAX_RECV_WR (32)
-// #define RDMA_MAX_SEND_WR (8192)
-// #define RDMA_MAX_RECV_WR (8192)
+// #define RDMA_MAX_SEND_WR (32)
+// #define RDMA_MAX_RECV_WR (32)
+#define RDMA_MAX_SEND_WR (8192)
+#define RDMA_MAX_RECV_WR (8192)
 
 
 enum rdma_role {
@@ -66,6 +70,7 @@ struct rdma_thread_param {
     unsigned long buffer_size;
     unsigned long mem_offset;
     unsigned long used_size;
+    unsigned long used_size_timed;
     unsigned long received_size;
 
     int control_socket;
@@ -73,14 +78,34 @@ struct rdma_thread_param {
     unsigned int backpressure_threshold_up;
     unsigned int backpressure_threshold_down;
 
-    sem_t *sem_recv_data;
+    long int start_ts;
 
+    sem_t *sem_recv_data;
+    pthread_mutex_t *backpressure_mutex;
+
+    int client_id;
     int stream;
+};
+
+struct linked_list_node {
+    unsigned int sent_size;
+    struct linked_list_node *next;
+};
+
+struct rdma_notification_thread_param {
+    int sender_thread_socket;
+    unsigned int sent_size;
+    struct linked_list_node *first, *last;
+    sem_t *sem_send_data;
+    pthread_mutex_t *notification_mutex;
+    int client_id;
 };
 
 struct rdma_backpressure_thread_param {
     int sender_thread_socket;
     unsigned int backpressure;
+    long int start_ts;
+    int client_id;
 };
 
 struct rdma_config {

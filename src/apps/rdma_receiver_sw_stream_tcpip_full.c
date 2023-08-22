@@ -181,11 +181,16 @@ main(int argc, char** argv)
     printf("rdma_receiver_sw_stream_tcpiop_full 1: buffer addr: %d\n", config.rdma_ctx->buf);
 
     // establish TCP/IP connection
-    int s;
+    int s, flag = 1;
     struct sockaddr_in s_in;
 
     if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         fprintf(stderr, "main: Socket initialization failed.\n");
+        exit(1);
+    }
+
+    if (-1 == setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag))) {  
+        fprintf(stderr, "main: setsockopt TCP_NODELAY failed.\n");
         exit(1);
     }
 

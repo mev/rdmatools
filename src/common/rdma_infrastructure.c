@@ -35,6 +35,48 @@ gid_to_wire_gid(const union ibv_gid *gid, char wgid[])
   }
 }
 
+static void
+set_timerfd(int fd, unsigned s, unsigned ns)
+{
+    struct itimerspec it;
+
+    it.it_interval.tv_sec = s;
+    it.it_interval.tv_nsec = ns;
+    it.it_value.tv_sec = s;
+    it.it_value.tv_nsec = ns;
+
+    if (timerfd_settime(fd, 0, &it, NULL)) {
+        printf("set_timerfd: timerfd_settime failed for fd %d. The timer will not fire.", fd);
+        return;
+    }
+}
+
+static long int
+get_current_timestamp_ns()
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) == -1) {
+        printf("get_current_timestamp_ns: clock_gettime failed");
+        return -1;
+    } else {
+        return now.tv_nsec + now.tv_sec * 1E9;
+    }
+}
+
+static long int
+get_current_timestamp_ns_thread_cpu()
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) == -1) {
+        printf("get_current_timestamp_ns: clock_gettime failed");
+        return -1;
+    } else {
+        return now.tv_nsec + now.tv_sec * 1E9;
+    }
+}
+
 char **
 rdma_prepare(struct rdma_config *config, int role)
 {
@@ -170,18 +212,18 @@ rdma_init_ctx(struct ibv_device *ib_dev, unsigned long *message_count, unsigned 
             memset(*(ctx->buf + i), 0x7b, *(ctx->size + i));
         }
     }
-    int k;
-    printf("ININTIALIZATION: Buffer data:\n");
-    for (k = 0; k < count; k++) {
-        printf("ININTIALIZATION: client #%d:\n", k + 1);
-        for (i = 0; i < *(message_count + k); i++) {
-            for (j = 0; j < *(message_size + k); j++) {
-                printf("%d:", *(*(ctx->buf + k) + i * *(message_size + k) + j));
-            }
-        }
-        printf("\n");
-    }
-    printf("DONE\n");
+    // int k;
+    // printf("ININTIALIZATION: Buffer data:\n");
+    // for (k = 0; k < count; k++) {
+    //     printf("ININTIALIZATION: client #%d:\n", k + 1);
+    //     for (i = 0; i < *(message_count + k); i++) {
+    //         for (j = 0; j < *(message_size + k); j++) {
+    //             printf("%d:", *(*(ctx->buf + k) + i * *(message_size + k) + j));
+    //         }
+    //     }
+    //     printf("\n");
+    // }
+    // printf("DONE\n");
 
     // Let the games begin!
     // open device
@@ -615,9 +657,50 @@ rdma_post_send(struct rdma_context *ctx, struct rdma_endpoint **remote_endpoint,
 }
 
 void *
+sender_notification_thread(void *arg)
+{
+    // int sval;
+    char buf[32];
+    // struct linked_list_node *temp;
+
+    struct rdma_notification_thread_param *notification_thread_args = (struct rdma_notification_thread_param *)arg;
+
+    while(1) {
+        sem_wait(notification_thread_args->sem_send_data);
+
+        // sem_getvalue(notification_thread_args->sem_send_data, &sval);
+
+        // debug_print("(sender_notification_thread) semaphore value: %d\n", sval);
+
+        // if (notification_thread_args->first) {
+            bzero(buf, 32);
+            sprintf(buf, "%u", notification_thread_args->sent_size);
+            // sprintf(buf, "%u", notification_thread_args->first->sent_size);
+            // debug_print("(sender_notification_thread) sending %u bytes\n", notification_thread_args->first->sent_size);
+            write(notification_thread_args->sender_thread_socket, buf, 32);
+            // debug_print("(sender_notification_thread) notification sent\n");
+
+            // pthread_mutex_lock(notification_thread_args->notification_mutex);
+            // if (notification_thread_args->first->next == NULL) {
+            //     notification_thread_args->first = notification_thread_args->last =  NULL;
+            // } else {
+            //     temp = notification_thread_args->first;
+            //     notification_thread_args->first = notification_thread_args->first->next;
+            // }
+            // free(temp);
+            // pthread_mutex_unlock(notification_thread_args->notification_mutex);
+        // } else {
+            // debug_print("(sender_notification_thread) no data in queue\n");
+        // }
+    }
+}
+
+void *
 sender_control_thread(void *arg)
 {
     char buf[32];
+    long int timestamp_ns;
+    char *buffer_token;
 
     struct rdma_backpressure_thread_param *backpressure_thread_args = (struct rdma_backpressure_thread_param *)arg;
 
@@ -625,11 +708,18 @@ sender_control_thread(void *arg)
         bzero(buf, 32);
         read(backpressure_thread_args->sender_thread_socket, buf, 32);
 
-        debug_print("(sender_control_thread) received: >>>%s<<<\n", buf);
-        if (strcmp(buf, "WAIT") == 0) {
+        buffer_token = strtok(buf, ":");
+        timestamp_ns = (get_current_timestamp_ns() - backpressure_thread_args->start_ts) / 1E6;
+
+        // debug_print("(sender_control_thread) received: >>>%s<<<\n", buf);
+        if (strcmp(buffer_token, "WAIT") == 0) {
             backpressure_thread_args->backpressure = 1;
-        } else if (strcmp(buf, "GO") == 0) {
+            buffer_token = strtok(NULL, ":");
+            printf("b1:%d:%ld:%d:%s\n", backpressure_thread_args->client_id, timestamp_ns, 0, buffer_token);
+        } else if (strcmp(buffer_token, "GO") == 0) {
             backpressure_thread_args->backpressure = 0;
+            buffer_token = strtok(NULL, ":");
+            printf("b1:%d:%ld:%d:%s\n", backpressure_thread_args->client_id, timestamp_ns, 1, buffer_token);
         }
     }
 }
@@ -644,27 +734,58 @@ client_thread(void *arg)
     struct ibv_wc wc[RDMA_MAX_SEND_WR];
 
     char buf[32];
+    long int timestamp_ns;
     unsigned long chunk_size;
+    // unsigned long chunk_count = 0;
+    // unsigned long chunk_limit = 10;
 
+    pthread_t *notification_thread = (pthread_t *)malloc(sizeof(pthread_t));
     pthread_t *backpressure_thread = (pthread_t *)malloc(sizeof(pthread_t));
+
     struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
+    struct rdma_notification_thread_param *notification_thread_args = (struct rdma_notification_thread_param *)malloc(sizeof(struct rdma_notification_thread_param));
     struct rdma_backpressure_thread_param *backpressure_thread_args = (struct rdma_backpressure_thread_param *)malloc(sizeof(struct rdma_backpressure_thread_param));
 
-    backpressure_thread_args->sender_thread_socket = thread_args->control_socket;
-    backpressure_thread_args->backpressure = 0;
+    long int timestamp_ns_thread_cpu_start, timestamp_ns_thread_cpu_now;
+
 
     full_queue_count = thread_args->message_count / RDMA_MAX_SEND_WR;
     remainder_queue_size = thread_args->message_count % RDMA_MAX_SEND_WR;
+    chunk_size = thread_args->message_count * thread_args->message_size;
 
 
     if (thread_args->stream) {
+        notification_thread_args->sender_thread_socket = thread_args->control_socket;
+        notification_thread_args->sent_size = chunk_size;
+        notification_thread_args->first = NULL;
+        notification_thread_args->last = NULL;
+        notification_thread_args->sem_send_data = (sem_t *)malloc(sizeof(sem_t));
+        notification_thread_args->notification_mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+        notification_thread_args->client_id = thread_args->client_id;
+
+        sem_init(notification_thread_args->sem_send_data, 0, 0);
+        pthread_mutex_init(notification_thread_args->notification_mutex, NULL);
+
+        backpressure_thread_args->sender_thread_socket = thread_args->control_socket;
+        backpressure_thread_args->backpressure = 0;
+        backpressure_thread_args->start_ts = thread_args->start_ts;
+        backpressure_thread_args->client_id = thread_args->client_id;
+
+        if (pthread_create(notification_thread, NULL, sender_notification_thread, notification_thread_args) != 0) {
+            debug_print("(RDMA_SEND_MT_STREAM) pthread_create() error - notification_threadm, client #%d\n", thread_args->client_id);
+        }
+
         if (pthread_create(backpressure_thread, NULL, sender_control_thread, backpressure_thread_args) != 0) {
-            debug_print("(RDMA_SEND_MT_STREAM) pthread_create() error - data_thread\n");
+            debug_print("(RDMA_SEND_MT_STREAM) pthread_create() error - backpressure_thread, client #%d\n", thread_args->client_id);
         }
     }
 
     while (1) {
+        timestamp_ns = (get_current_timestamp_ns() - thread_args->start_ts) / 1E6;
+
         if (!backpressure_thread_args->backpressure) {
+            timestamp_ns_thread_cpu_start = get_current_timestamp_ns_thread_cpu();
+
             total = 0;
             num_cq_events = 0;
             for (j = 0; j < full_queue_count; j++) {
@@ -705,30 +826,36 @@ client_thread(void *arg)
                         (list + i)->addr = (uint64_t)(*(thread_args->rdma_ctx->buf + thread_args->ctx_index) + (j * RDMA_MAX_SEND_WR + i) * thread_args->message_size);
                         (list + i)->lkey = (*(thread_args->rdma_ctx->mr + thread_args->ctx_index))->lkey;
 
-                        if (ibv_post_send(*(thread_args->rdma_ctx->qp + thread_args->ctx_index), wr + i, bad_wr + i)) {
-                            fprintf(stderr, "rdma_post_send_mt: Couldn't post send #%d\n", i);
-                            break;
-                        } else {
-                            total++;
-                        }
+                        // if (ibv_post_send(*(thread_args->rdma_ctx->qp + thread_args->ctx_index), wr + i, bad_wr + i)) {
+                        //     fprintf(stderr, "rdma_post_send_mt: Couldn't post send #%d\n", i);
+                        //     break;
+                        // } else {
+                        //     total++;
+                        // }
+                    }
+                    if (ibv_post_send(*(thread_args->rdma_ctx->qp + thread_args->ctx_index), wr, bad_wr)) {
+                        fprintf(stderr, "rdma_post_send_mt: Couldn't post sends, client #%d\n", thread_args->client_id);
+                    //     break;
+                    // } else {
+                    //     total++;
                     }
                     // printf("\nDONE PREPARE #%d, loop %d\n", thread_args->ctx_index + 1, j);
 
                     // debug_print("(client %d, loop %d) written %d posts\n", thread_args->ctx_index + 1, j, i);
-                    if (i < RDMA_MAX_SEND_WR) {
-                        debug_print("(client %d, loop %d) missing %d writes\n", thread_args->ctx_index + 1, j, RDMA_MAX_SEND_WR - i);
-                        done = 0;
-                        last = i;
-                    } else {
-                        // debug_print("(client %d, loop %d) all writes done\n", thread_args->ctx_index + 1, j);
+                    // if (i < RDMA_MAX_SEND_WR) {
+                    //     debug_print("(client %d, loop %d) missing %d writes\n", thread_args->ctx_index + 1, j, RDMA_MAX_SEND_WR - i);
+                    //     done = 0;
+                    //     last = i;
+                    // } else {
+                    //     // debug_print("(client %d, loop %d) all writes done\n", thread_args->ctx_index + 1, j);
                         done = 1;
-                    }
+                    // }
 
                     left = RDMA_MAX_SEND_WR;
                     do {
                         ne = ibv_poll_cq(*(thread_args->rdma_ctx->cq + thread_args->ctx_index), left, wc);
                         if (ne < 0) {
-                            debug_print("(client %d, loop %d) poll CQ failed %d\n", thread_args->ctx_index + 1, j, ne);
+                            debug_print("(client %d, loop %d) poll CQ failed %d, client #%d\n", thread_args->ctx_index + 1, j, ne, thread_args->client_id);
                         } else {
                             left -= ne;
                             // debug_print("(client %d, loop %d) ne=%d, left=%d\n", thread_args->ctx_index + 1, j, ne, left);
@@ -784,32 +911,38 @@ client_thread(void *arg)
                     // printf("buf: %d\n", *(*(thread_args->rdma_ctx->buf + k) + (j * RDMA_MAX_SEND_WR + i) * thread_args->message_size));
                     (list + i)->lkey = (*(thread_args->rdma_ctx->mr + thread_args->ctx_index))->lkey;
 
-                    if (ibv_post_send(*(thread_args->rdma_ctx->qp + thread_args->ctx_index), wr + i, bad_wr + i)) {
-                        fprintf(stderr, "rdma_post_send_mt: Couldn't post send #%d\n", i);
-                        break;
-                    } else {
-                        total++;
-                    }
+                    // if (ibv_post_send(*(thread_args->rdma_ctx->qp + thread_args->ctx_index), wr + i, bad_wr + i)) {
+                    //     fprintf(stderr, "rdma_post_send_mt: Couldn't post send #%d\n", i);
+                    //     break;
+                    // } else {
+                    //     total++;
+                    // }
                     // printf("DONE POST SEND %d\n", i);
+                }
+                if (ibv_post_send(*(thread_args->rdma_ctx->qp + thread_args->ctx_index), wr, bad_wr)) {
+                    fprintf(stderr, "rdma_post_send_mt: Couldn't post sends, client #%d\n", thread_args->client_id);
+                //     break;
+                // } else {
+                //     total++;
                 }
                 // printf("\nDONE PREPARE #%d, last loop\n", thread_args->ctx_index + 1);
 
                 // debug_print("(client %d, final loop) written %d posts\n", thread_args->ctx_index + 1, i);
-                if (i < remainder_queue_size) {
-                    debug_print("(client %d, final loop) missing %d writes\n", thread_args->ctx_index + 1, remainder_queue_size - i);
-                    done = 0;
-                    last = i;
-                } else {
-                    // debug_print("(client %d, final loop) all writes done\n", thread_args->ctx_index + 1);
+                // if (i < remainder_queue_size) {
+                //     debug_print("(client %d, final loop) missing %d writes\n", thread_args->ctx_index + 1, remainder_queue_size - i);
+                //     done = 0;
+                //     last = i;
+                // } else {
+                //     // debug_print("(client %d, final loop) all writes done\n", thread_args->ctx_index + 1);
                     done = 1;
-                }
+                // }
 
                 left = remainder_queue_size;
                 do {
                     // sleep(1);
                     ne = ibv_poll_cq(*(thread_args->rdma_ctx->cq + thread_args->ctx_index), left, wc);
                     if (ne < 0) {
-                        debug_print("(client %d, final loop) poll CQ failed %d\n", thread_args->ctx_index + 1, ne);
+                        debug_print("(client %d, final loop) poll CQ failed %d, client #%d\n", thread_args->ctx_index + 1, ne, thread_args->client_id);
                     } else {
                         // for (l=0; l<ne; l++) {
                         //     if ((wc + l)->status != IBV_WC_SUCCESS) {
@@ -829,25 +962,68 @@ client_thread(void *arg)
             free(bad_wr);
             free(list);
 
-            chunk_size = thread_args->message_count * thread_args->message_size;
+            timestamp_ns_thread_cpu_now = get_current_timestamp_ns_thread_cpu();
+
+            debug_print("t1:%d:%ld:%lu\n", thread_args->client_id, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
+
             thread_args->mem_offset += chunk_size;
             thread_args->mem_offset %= thread_args->buffer_size;
             // debug_print("(RDMA_SEND_MT_STREAM) buffer size: %d\n", thread_args->buffer_size);
-            debug_print("(RDMA_SEND_MT_STREAM) current mem_offset: %d\n", thread_args->mem_offset);
+            // debug_print("(RDMA_SEND_MT_STREAM) current mem_offset: %d\n", thread_args->mem_offset);
 
-            bzero(buf, 32);
-            sprintf(buf, "%d", chunk_size);
-            write(backpressure_thread_args->sender_thread_socket, buf, 32);
+            // struct linked_list_node *new_node = (struct linked_list_node *)malloc(sizeof(struct linked_list_node));
+            // new_node->sent_size = chunk_size;
+            // new_node->next = NULL;
+            // // pthread_mutex_lock(notification_thread_args->notification_mutex);
+            // if (notification_thread_args->last == NULL) {
+            //     // debug_print("(RDMA_SEND_MT_STREAM) 1\n");
+            //     notification_thread_args->first = notification_thread_args->last =  new_node;
+            // } else {
+            //     if (notification_thread_args->first == notification_thread_args->last) {
+            //         // debug_print("(RDMA_SEND_MT_STREAM) 2\n");
+            //         notification_thread_args->first->next = new_node;
+            //         notification_thread_args->last = new_node;
+            //     } else {
+            //         // debug_print("(RDMA_SEND_MT_STREAM) 3\n");
+            //         notification_thread_args->last->next = new_node;
+            //         notification_thread_args->last = new_node;
+            //     }
+            // }
+            // pthread_mutex_unlock(notification_thread_args->notification_mutex);
+            sem_post(notification_thread_args->sem_send_data);
+
+            // try #1
+            // bzero(buf, 32);
+            // sprintf(buf, "%d", chunk_size);
+            // write(backpressure_thread_args->sender_thread_socket, buf, 32);
+            // try #2
+            // chunk_count++;
+            // if (chunk_count == chunk_limit) {
+            //     bzero(buf, 32);
+            //     sprintf(buf, "%d", chunk_size * chunk_limit);
+            //     write(backpressure_thread_args->sender_thread_socket, buf, 32);
+            //     chunk_count = 0;
+            // }
         } else {
-            debug_print("(RDMA_SEND_MT_STREAM) backpressure\n");
+            // debug_print("(RDMA_SEND_MT_STREAM) backpressure\n");
+            printf("s1:%d:%ld\n", thread_args->client_id, timestamp_ns);
             usleep(1000);
         }
     }
 
     if (thread_args->stream) {
         if (pthread_join(*backpressure_thread, NULL) != 0) {
-            debug_print("(RDMA_SEND_MT_STREAM) pthread_join() error - data_thread\n");
+            debug_print("(RDMA_SEND_MT_STREAM) pthread_join() error - backpressure_thread, client #%d\n", thread_args->client_id);
         }
+
+        if (pthread_join(*notification_thread, NULL) != 0) {
+            debug_print("(RDMA_SEND_MT_STREAM) pthread_join() error - notification_thread, client #%d\n", thread_args->client_id);
+        }
+
+        free(backpressure_thread_args);
+        free(notification_thread_args);
+        free(notification_thread_args->sem_send_data);
+        free(notification_thread_args->notification_mutex);
     }
 
     return NULL;
@@ -914,6 +1090,9 @@ rdma_post_send_mt_stream(int *control_socket_list, struct rdma_context *ctx, str
 
         (thread_arg_list + i)->control_socket = *(control_socket_list + i);
 
+        (thread_arg_list + i)->start_ts = get_current_timestamp_ns();
+
+        (thread_arg_list + i)->client_id = i;
         (thread_arg_list + i)->stream = 1;
     }
 
@@ -946,29 +1125,37 @@ receiver_data_thread(void *arg)
     unsigned long chunk_size;
     unsigned int new_mem_offset_total;
     unsigned int new_mem_offset_circular;
+    long int timestamp_ns;
+    long int crt = 0;
 
     struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
 
-    while(1) {
+    while (1) {
         sem_wait(thread_args->sem_recv_data);
 
         sem_getvalue(thread_args->sem_recv_data, &sval);
-        printf("receiver_data_thread: semaphore value: %d\n", sval);
 
-        printf("receiver_data_thread: used size: %d\n", thread_args->used_size);
+        timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
+
+        // printf("receiver_data_thread: semaphore value: %d\n", sval);
+        printf("d1:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), sval);
+
+        // printf("receiver_data_thread: used size: %d\n", thread_args->used_size);
+        printf("d2:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
 
         // Print data in the reserved memory when the sem_recv_data semaphore unlocks, meaning that data has been received
         devnull = (char *)malloc(thread_args->received_size);
-        chunk_size = thread_args->message_count * thread_args->message_size;
-        if (chunk_size > thread_args->used_size) {
-            chunk_size = thread_args->used_size;
-        }
+        chunk_size = thread_args->received_size;
+        // chunk_size = thread_args->message_count * thread_args->message_size;
+        // if (chunk_size > thread_args->used_size) {
+        //     chunk_size = thread_args->used_size;
+        // }
 
-        printf("receiver_data_thread: last transfer - received %d bytes\n", thread_args->received_size);
+        // printf("receiver_data_thread: last transfer - received %d bytes\n", thread_args->received_size);
         new_mem_offset_total = thread_args->mem_offset + chunk_size;
         new_mem_offset_circular = new_mem_offset_total % thread_args->buffer_size;
         // printf("receiver_data_thread: buffer addr: %d\n", (char *)(*thread_args->rdma_ctx->buf));
-        printf("receiver_data_thread: buffer offset: %d\n", thread_args->mem_offset);
+        // printf("receiver_data_thread: buffer offset: %d\n", thread_args->mem_offset);
         // printf("receiver_data_thread: buffer addr + offset: %d %d %d\n", (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, (char *)(*thread_args->rdma_ctx->buf), thread_args->mem_offset);
         if (new_mem_offset_total > thread_args->buffer_size) {
             // printf("taped together\n");
@@ -991,22 +1178,29 @@ receiver_data_thread(void *arg)
         }
         thread_args->mem_offset = new_mem_offset_circular;
         thread_args->used_size -= chunk_size;
-        printf("\nreceiver_data_thread: finished processing %d bytes chunk\n", chunk_size);
+        // printf("\nreceiver_data_thread: finished processing %d bytes chunk\n", chunk_size);
 
         // usleep(50);
 
         free(devnull);
         // End of data check
 
-        printf("receiver_data_thread: new used size: %d\n", thread_args->used_size);
+        // printf("receiver_data_thread: new used size: %d\n", thread_args->used_size);
+        printf("d3:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
 
+        bzero(buf, 32);
+        sprintf(buf, "GO:%ld", crt);
+        // pthread_mutex_lock(thread_args->backpressure_mutex);
         if (thread_args->backpressure == 1 && thread_args->used_size < (thread_args->buffer_size * thread_args->backpressure_threshold_down / 100)) {
-            write(thread_args->control_socket, "GO", 32);
+            write(thread_args->control_socket, buf, 32);
             thread_args->backpressure = 0;
-            printf("receiver_data_thread: backpressure change: GO\n");
+            // printf("receiver_data_thread: backpressure change: GO\n");
+            printf("d4:%ld:%ld:%d:%ld\n", timestamp_ns, (timestamp_ns / 1000000), 1, crt++);
         } else if (thread_args->backpressure == 0) {
-            printf("receiver_control_thread: backpressure already on: GO\n");
+            // printf("receiver_control_thread: backpressure already on: GO\n");
+            printf("d4:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), 0);
         }
+        // pthread_mutex_unlock(thread_args->backpressure_mutex);
     }
 }
 
@@ -1016,42 +1210,86 @@ receiver_control_thread(void *arg)
     char buf[32];
     char* end;
     int backpressure = 0, backpressure_change = 0;
+    long int timestamp_ns;
+    long int crt = 0;
 
     struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
 
-    while(1) {
-        debug_print("receiver_control_thread: waiting to receive bytes\n");
+    while (1) {
+        // debug_print("receiver_control_thread: waiting to receive bytes\n");
         bzero(buf, 32);
         read(thread_args->control_socket, buf, 32);
+
+        timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
+
         thread_args->received_size = strtol(buf, &end, 0);
         if (end == buf) {
             debug_print("receiver_control_thread: failed to convert received string \"%s\" to unsigned int\n", buf);
         }
-        debug_print("receiver_control_thread: received bytes: %d\n", thread_args->received_size);
+        // debug_print("receiver_control_thread: received bytes: %d\n", thread_args->received_size);
         thread_args->used_size += thread_args->received_size;
+        thread_args->used_size_timed += thread_args->received_size;
 
         sem_post(thread_args->sem_recv_data);
 
-        printf("receiver_control_thread: new used size: %d\n", thread_args->used_size);
+        // printf("receiver_control_thread: new used size: %d\n", thread_args->used_size);
+        printf("c1:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
 
+        bzero(buf, 32);
+        sprintf(buf, "WAIT:%ld", crt);
+        // pthread_mutex_lock(thread_args->backpressure_mutex);
         if (thread_args->backpressure == 0 && thread_args->used_size >= (thread_args->buffer_size * thread_args->backpressure_threshold_up / 100)) {
-            write(thread_args->control_socket, "WAIT", 32);
+            write(thread_args->control_socket, buf, 32);
             thread_args->backpressure = 1;
-            printf("receiver_control_thread: backpressure change: WAIT\n");
+            // printf("receiver_control_thread: backpressure change: WAIT\n");
+            printf("c2:%ld:%ld:%d:%ld\n", timestamp_ns, (timestamp_ns / 1000000), 1, crt++);
         } else if (thread_args->backpressure == 1) {
-            printf("receiver_control_thread: backpressure already on: WAIT\n");
+            // printf("receiver_control_thread: backpressure already on: WAIT\n");
+            printf("c2:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), 0);
         }
+        // pthread_mutex_unlock(thread_args->backpressure_mutex);
+    }
+}
+
+void *
+receiver_instrumentation_thread(void *arg)
+{
+    int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+    unsigned long timestamp_s = 0;
+    ssize_t s;
+    uint64_t exp;
+    struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
+
+    if (tfd == -1) {
+        printf("receiver_instrumentation_thread: timerfd_create failed\n");
+    }
+
+    set_timerfd(tfd, 1, 0);
+    // set_timerfd(tfd, 0, 1000000);
+
+    while (1) {
+        s = read(tfd, &exp, sizeof(uint64_t));
+        if (s != sizeof(uint64_t)) {
+            printf("receiver_instrumentation_thread: read failed\n");
+        }
+
+        printf("i1:%lu:%lu:%lu\n", timestamp_s * 1000000000, timestamp_s, thread_args->used_size_timed);
+        // printf("i1:%lu:%lu:%lu\n", timestamp_s * 1000000, timestamp_s, thread_args->used_size_timed);
+        timestamp_s++;
+
+        thread_args->used_size_timed = 0;
     }
 }
 
 int
 rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset)
 {
-    pthread_t *data_thread, *control_thread;
+    pthread_t *data_thread, *control_thread, *instrumentation_thread;
     struct rdma_thread_param *thread_args;
 
     data_thread = (pthread_t *)malloc(sizeof(pthread_t));
     control_thread = (pthread_t *)malloc(sizeof(pthread_t));
+    instrumentation_thread = (pthread_t *)malloc(sizeof(pthread_t));
     thread_args = (struct rdma_thread_param *)malloc(sizeof(struct rdma_thread_param));
 
     printf("rdma_consume before: buffer addr: %d\n", ctx->buf);
@@ -1062,6 +1300,7 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
     thread_args->buffer_size = *buffer_size;
     thread_args->mem_offset = *mem_offset;
     thread_args->used_size = 0;
+    thread_args->used_size_timed = 0;
     thread_args->received_size = 0;
 
     thread_args->control_socket = control_socket;
@@ -1069,9 +1308,13 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
     thread_args->backpressure_threshold_up = backpressure_threshold_up;
     thread_args->backpressure_threshold_down = backpressure_threshold_down;
 
+    thread_args->start_ts = get_current_timestamp_ns();
+
     thread_args->sem_recv_data = (sem_t *)malloc(sizeof(sem_t));
+    thread_args->backpressure_mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
 
     sem_init(thread_args->sem_recv_data, 0, 0);
+    pthread_mutex_init(thread_args->backpressure_mutex, NULL);
 
     if (pthread_create(data_thread, NULL, receiver_data_thread, thread_args) != 0) {
         debug_print("(RDMA_CONSUME) pthread_create() error - data_thread\n");
@@ -1079,6 +1322,10 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
 
     if (pthread_create(control_thread, NULL, receiver_control_thread, thread_args) != 0) {
         debug_print("(RDMA_CONSUME) pthread_create() error - control_thread\n");
+    }
+
+    if (pthread_create(instrumentation_thread, NULL, receiver_instrumentation_thread, thread_args) != 0) {
+        debug_print("(RDMA_CONSUME) pthread_create() error - instrumentation_thread\n");
     }
 
     if (pthread_join(*data_thread, NULL) != 0) {
@@ -1089,7 +1336,14 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
         debug_print("(RDMA_CONSUME) pthread_join() error - control_thread\n");
     }
 
+    if (pthread_join(*instrumentation_thread, NULL) != 0) {
+        debug_print("(RDMA_CONSUME) pthread_join() error - instrumentation_thread\n");
+    }
+
+    pthread_mutex_destroy(thread_args->backpressure_mutex);
+
     free(thread_args->sem_recv_data);
+    free(thread_args->backpressure_mutex);
     free(thread_args);
 
 	return 0;
