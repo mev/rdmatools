@@ -10,5 +10,9 @@ include_directories(src/common)
 add_executable(rdmatools_0_3_ssh
             src/common/optparse.hpp
             src/common/rdma_context.hpp
-            main.cpp
-        )
+            src/common/rdma_utils.hpp
+            src/common/rdma_config.hpp
+            src/common/rdma_endpoint.hpp
+            main.cpp)
+
+target_link_libraries(rdmatools_0_3_ssh pthread ibverbs)

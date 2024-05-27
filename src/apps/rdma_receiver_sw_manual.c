@@ -1,7 +1,4 @@
-#include "rdma_infrastructure.h"
-
-
-struct rdma_config config;
+//struct rdma_config config;
 
 /* Options. */
 static struct argp_option options[] = {
