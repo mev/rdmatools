@@ -160,11 +160,16 @@ main(int argc, char** argv)
     fprintf(stdout, "(RDMA_RECEIVER) local RDMA metadata: %s\n", *local_receiver_rdma_metadata);
 
     // establish TCP/IP connection
-    int s;
+    int s, flag = 1;
     struct sockaddr_in s_in;
 
     if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         fprintf(stderr, "main: Socket initialization failed.\n");
+        exit(1);
+    }
+
+    if (-1 == setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag))) {  
+        fprintf(stderr, "main: setsockopt TCP_NODELAY failed.\n");
         exit(1);
     }
 
@@ -205,6 +210,8 @@ main(int argc, char** argv)
         exit(1);
 	}
 
+    write(s, "GO", 32);
+
     // fprintf(stdout, "(RDMA_RECEIVER) [FOURTH] [Wait a little and then press ENTER to check the received data... (AFTER changing the QP state)]\n");
     // getchar();
 
@@ -212,7 +219,7 @@ main(int argc, char** argv)
     do {
         bzero(buf, 32);
         read(s, buf, 32);
-    } while (strcmp(buf, "DONE") == 0);
+    } while (strcmp(buf, "DONE") != 0);
 
     // Print data in the reserved memory at the end of the write
     // int i, j;

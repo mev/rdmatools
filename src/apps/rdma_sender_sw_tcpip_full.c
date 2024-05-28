@@ -156,6 +156,11 @@ main(int argc, char** argv)
         exit(1);
     }
 
+    if (-1 == setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag))) {  
+        fprintf(stderr, "main: setsockopt TCP_NODELAY failed.\n");
+        exit(1);
+    }
+
     bzero(&s_in, sizeof(s_in));
     s_in.sin_family = AF_INET;
     s_in.sin_addr.s_addr=inet_addr(config.local_hostname);
@@ -217,14 +222,20 @@ main(int argc, char** argv)
         exit(1);
 	}
 
+    char buf[32];
+    do {
+        bzero(buf, 32);
+        read(c, buf, 32);
+    } while (strcmp(buf, "GO") != 0);
+
     // if (rdma_post_send(config.rdma_ctx, config.remote_endpoint, config.message_count, config.message_size, config.mem_offset, config.remote_count) < 0) {
     if (rdma_post_send_mt(config.rdma_ctx, config.remote_endpoint, config.message_count, config.message_size, config.mem_offset, config.remote_count) < 0) {
         fprintf(stderr, "main: Failed to post writes.\n");
         exit(1);
     }
 
-    char buf[32];
-    write(s, "DONE", 32);
+    // char buf[32];
+    write(c, "DONE", 32);
 
 	if (rdma_close_ctx(config.rdma_ctx, config.remote_count)) {
         fprintf(stderr, "main: Failed to clean up before exiting.\n");

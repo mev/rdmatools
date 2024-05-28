@@ -235,6 +235,9 @@ main(int argc, char** argv)
 
     printf("rdma_receiver_sw_stream_tcpiop_full 3: buffer addr: %d\n", config.rdma_ctx->buf);
 
+    write(s, "GO", 32);
+    printf("rdma_receiver_sw_stream_tcpiop_full 4: GO\n");
+
     if (rdma_consume(s, backpressure_threshold_up, backpressure_threshold_down, config.rdma_ctx, config.message_count, config.message_size, config.buffer_size, config.mem_offset) < 0) {
         fprintf(stderr, "main: Failed to consume incoming data.\n");
         exit(1);

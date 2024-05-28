@@ -702,6 +702,7 @@ sender_control_thread(void *arg)
 {
     char buf[32];
     long int timestamp_ns;
+    long int timestamp_ms;
     char *buffer_token;
 
     struct rdma_backpressure_thread_param *backpressure_thread_args = (struct rdma_backpressure_thread_param *)arg;
@@ -711,17 +712,18 @@ sender_control_thread(void *arg)
         read(backpressure_thread_args->sender_thread_socket, buf, 32);
 
         buffer_token = strtok(buf, ":");
-        timestamp_ns = (get_current_timestamp_ns() - backpressure_thread_args->start_ts) / 1E6;
+        timestamp_ns = get_current_timestamp_ns() - backpressure_thread_args->start_ts;
+        timestamp_ms = timestamp_ns / 1E6;
 
         // debug_print("(sender_control_thread) received: >>>%s<<<\n", buf);
         if (strcmp(buffer_token, "WAIT") == 0) {
             backpressure_thread_args->backpressure = 1;
             buffer_token = strtok(NULL, ":");
-            printf("b1:%d:%ld:%d:%s\n", backpressure_thread_args->client_id, timestamp_ns, 0, buffer_token);
+            printf("b1:%d:%ld:%ld:%d:%s\n", backpressure_thread_args->client_id, timestamp_ns, timestamp_ms, 0, buffer_token);
         } else if (strcmp(buffer_token, "GO") == 0) {
             backpressure_thread_args->backpressure = 0;
             buffer_token = strtok(NULL, ":");
-            printf("b1:%d:%ld:%d:%s\n", backpressure_thread_args->client_id, timestamp_ns, 1, buffer_token);
+            printf("b1:%d:%ld:%ld:%d:%s\n", backpressure_thread_args->client_id, timestamp_ns, timestamp_ms, 1, buffer_token);
         }
     }
 }
@@ -737,6 +739,7 @@ client_thread(void *arg)
 
     char buf[32];
     long int timestamp_ns;
+    long int timestamp_ms;
     unsigned long chunk_size;
     // unsigned long chunk_count = 0;
     // unsigned long chunk_limit = 10;
@@ -783,7 +786,8 @@ client_thread(void *arg)
     }
 
     while (1) {
-        timestamp_ns = (get_current_timestamp_ns() - thread_args->start_ts) / 1E6;
+        timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
+        timestamp_ms = timestamp_ns / 1E6;
 
         if (!backpressure_thread_args->backpressure) {
             timestamp_ns_thread_cpu_start = get_current_timestamp_ns_thread_cpu();
@@ -966,7 +970,7 @@ client_thread(void *arg)
 
             timestamp_ns_thread_cpu_now = get_current_timestamp_ns_thread_cpu();
 
-            debug_print("t1:%d:%ld:%lu\n", thread_args->client_id, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
+            debug_print("t1:%d:%ld:%ld:%lu\n", thread_args->client_id, timestamp_ns, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
 
             if (!thread_args->stream) {
                 break;
@@ -1014,7 +1018,7 @@ client_thread(void *arg)
             // }
         } else {
             // debug_print("(RDMA_SEND_MT_STREAM) backpressure\n");
-            printf("s1:%d:%ld\n", thread_args->client_id, timestamp_ns);
+            printf("s1:%d:%ld:%ld\n", thread_args->client_id, timestamp_ns,  timestamp_ms);
             usleep(1000);
         }
     }
@@ -1166,25 +1170,25 @@ receiver_data_thread(void *arg)
         // printf("receiver_data_thread: buffer addr: %d\n", (char *)(*thread_args->rdma_ctx->buf));
         // printf("receiver_data_thread: buffer offset: %d\n", thread_args->mem_offset);
         // printf("receiver_data_thread: buffer addr + offset: %d %d %d\n", (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, (char *)(*thread_args->rdma_ctx->buf), thread_args->mem_offset);
-        if (new_mem_offset_total > thread_args->buffer_size) {
-            // printf("taped together\n");
-            memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size - new_mem_offset_circular);
-            // for (i = 0; i < chunk_size - new_mem_offset_circular; i++) {
-            //     printf("%d:", *(devnull + i));
-            // }
-            memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf), new_mem_offset_circular);
-            // for (i = 0; i < new_mem_offset_circular; i++) {
-            //     printf("%d:", *(devnull + i));
-            // }
-            // printf("\n");
-        } else {
-            // printf("single chunk\n");
-            memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size);
-            // for (i = 0; i < chunk_size; i++) {
-            //     printf("%d:", *(devnull + i));
-            // }
-            // printf("\n");
-        }
+        // if (new_mem_offset_total > thread_args->buffer_size) {
+        //     // printf("taped together\n");
+        //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size - new_mem_offset_circular);
+        //     // for (i = 0; i < chunk_size - new_mem_offset_circular; i++) {
+        //     //     printf("%d:", *(devnull + i));
+        //     // }
+        //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf), new_mem_offset_circular);
+        //     // for (i = 0; i < new_mem_offset_circular; i++) {
+        //     //     printf("%d:", *(devnull + i));
+        //     // }
+        //     // printf("\n");
+        // } else {
+        //     // printf("single chunk\n");
+        //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size);
+        //     // for (i = 0; i < chunk_size; i++) {
+        //     //     printf("%d:", *(devnull + i));
+        //     // }
+        //     // printf("\n");
+        // }
         thread_args->mem_offset = new_mem_offset_circular;
         thread_args->used_size -= chunk_size;
         // printf("\nreceiver_data_thread: finished processing %d bytes chunk\n", chunk_size);
@@ -1239,10 +1243,10 @@ receiver_control_thread(void *arg)
         thread_args->used_size += thread_args->received_size;
         thread_args->used_size_timed += thread_args->received_size;
 
-        sem_post(thread_args->sem_recv_data);
-
         // printf("receiver_control_thread: new used size: %d\n", thread_args->used_size);
         printf("c1:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
+
+        sem_post(thread_args->sem_recv_data);
 
         bzero(buf, 32);
         sprintf(buf, "WAIT:%ld", crt);

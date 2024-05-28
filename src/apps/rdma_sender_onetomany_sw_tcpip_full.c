@@ -194,6 +194,11 @@ main(int argc, char** argv)
         exit(1);
     }
 
+    if (-1 == setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag))) {  
+        fprintf(stderr, "main: setsockopt TCP_NODELAY failed.\n");
+        exit(1);
+    }
+
     bzero(&s_in, sizeof(s_in));
     s_in.sin_family = AF_INET;
     s_in.sin_addr.s_addr=inet_addr(config.local_hostname);
@@ -263,6 +268,15 @@ main(int argc, char** argv)
         exit(1);
     }
 
+    char buf[32];
+    for (i = 0; i < config.remote_count; i++) {
+        // char buf[32];
+        do {
+            bzero(buf, 32);
+            read(*(clinet_connfd_list + i), buf, 32);
+        } while (strcmp(buf, "GO") != 0);
+    }
+
     // if (rdma_post_send(config.rdma_ctx, config.remote_endpoint, config.message_count, config.message_size, config.mem_offset, config.remote_count) < 0) {
     if (rdma_post_send_mt(config.rdma_ctx, config.remote_endpoint, config.message_count, config.message_size, config.mem_offset, config.remote_count) < 0) {
         fprintf(stderr, "main: Failed to post writes.\n");
@@ -270,7 +284,7 @@ main(int argc, char** argv)
     }
 
     for (i = 0; i < config.remote_count; i++) {
-        char buf[32];
+        // char buf[32];
         write(*(clinet_connfd_list + i), "DONE", 32);
     }
 
