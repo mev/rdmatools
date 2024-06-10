@@ -233,7 +233,7 @@ public:
         return false;
     }
 
-    int
+    static int
     rdma_connect_ctx(struct rdma_context *ctx, int port, enum ibv_mtu mtu, struct rdma_endpoint **local_endpoint, struct rdma_endpoint **remote_endpoint, unsigned count, int sgid_idx, int role)
     {
         int i;
@@ -302,7 +302,7 @@ public:
         return 0;
     }
 
-    int
+    static int
     rdma_close_ctx(struct rdma_context *ctx, unsigned count)
     {
         int i;

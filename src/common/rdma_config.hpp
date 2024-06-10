@@ -2,8 +2,9 @@
 
 #include <infiniband/verbs.h>
 #include <arpa/inet.h>
+#include "rdma_rand.hpp"
 
-class rdma_config {
+struct rdma_config {
     int function;
 
     const char *local_hostname;
@@ -12,7 +13,7 @@ class rdma_config {
     const char *remote_hostname;
     unsigned remote_port;
 
-    char *ib_devname;
+    std::string ib_devname;
     uint32_t gidx;
     enum ibv_mtu mtu;
 
@@ -31,11 +32,21 @@ class rdma_config {
     unsigned remote_count; // = <client count> on sender and = 1 on receiver
 
 public:
-    char ** rdma_prepare(int role)
+    char* rdma_prepare_remote(int role) {
+        // 52 characters for the string + 1 character for the new line, otherwise the getchar() misbehaves
+        char* remote_sender_rdma_metadata = (char *)malloc(53);
+        memset(remote_sender_rdma_metadata, 0, 53);
+
+        fgets(remote_sender_rdma_metadata, 53, stdin);
+        sscanf(remote_sender_rdma_metadata, "%0lx:%0lx:%0lx:%s\n", &((*(remote_endpoint))->lid), &((*(remote_endpoint))->qpn),
+               &((*(remote_endpoint))->psn), &((*(remote_endpoint))->gid_string));
+        return remote_sender_rdma_metadata;
+    }
+
+    char ** rdma_prepare_local(int role)
     {
         int i;
         char **rdma_metadata;
-        struct timespec now;
 
         dev_list = ibv_get_device_list(NULL);
         if (!dev_list) {
@@ -44,13 +55,13 @@ public:
         }
 
         for (i = 0; dev_list[i]; ++i) {
-            if (!strcmp(ibv_get_device_name(dev_list[i]), ib_devname)) {
+            if (std::string(ibv_get_device_name(dev_list[i])) == ib_devname) {
                 break;
             }
         }
         ib_dev = dev_list[i];
         if (!ib_dev) {
-            fprintf(stderr, "rdma_prepare: IB device %s not found\n", ib_devname);
+            fprintf(stderr, "rdma_prepare: IB device %s not found\n", ib_devname.c_str());
             return NULL;
         }
 
@@ -87,13 +98,11 @@ public:
             inet_ntop(AF_INET6, &(*(local_endpoint + i))->gid, (*(local_endpoint + i))->gid_string, sizeof((*(local_endpoint + i))->gid_string));
             rdma_utils::gid_to_wire_gid(&local_endpoint[i]->gid, local_endpoint[i]->gid_string);
 
-            if (clock_gettime(CLOCK_REALTIME, &now) == -1) {
-                srand(time(NULL));
-            } else {
-                srand((int)now.tv_nsec);
-            }
+            rdma_rand rr;
+            rr.init();
+
             (*(local_endpoint + i))->qpn = (*(rdma_ctx->qp + i))->qp_num;
-            (*(local_endpoint + i))->psn = rand() & 0xffffff;
+            (*(local_endpoint + i))->psn = rr.getrand() & 0xffffff;
 
             if (function == RDMA_WRITE && role == RDMA_RECEIVER) {
                 (*(local_endpoint + i))->rkey = (*(rdma_ctx->mr + i))->rkey;
@@ -112,4 +121,17 @@ public:
 
         return(rdma_metadata);
     }
+
+    void rdma_connect() {
+        rdma_utils::wire_gid_to_gid((*(remote_endpoint))->gid_string, &((*(remote_endpoint))->gid));
+        if (rdma_context::rdma_connect_ctx(rdma_ctx, 1, mtu, local_endpoint, remote_endpoint, remote_count, gidx, RDMA_RECEIVER)) {
+            fprintf(stderr, "main:  Failed to connect to remote RDMA endpoint (provider).\n");
+            exit(1);
+        }
+    }
+
+    auto rdma_disconnect() {
+        return rdma_context::rdma_close_ctx(rdma_ctx, remote_count);
+    }
 };
+
