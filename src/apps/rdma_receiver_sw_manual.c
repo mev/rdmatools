@@ -94,18 +94,14 @@ static struct argp argp = { options, parse_opt, args_doc, doc };
 void
 cli_parse(int argc, char **argv, struct rdma_config* config)
 {
-    struct timespec now;
-    if (clock_gettime(CLOCK_REALTIME, &now) == -1) {
-        srand(time(NULL));
-    } else {
-        srand((int)now.tv_nsec);
-    }
+    rdma_rand rr;
+    rr.init();
 
     // set default values
     config->function = RDMA_WRITE;
 
     config->local_hostname = "";
-    config->local_port = rand();
+    config->local_port = rr.getrand();
     config->remote_hostname = "";
     config->remote_port = 53100;
 
@@ -136,9 +132,14 @@ main(int argc, char** argv)
 {
     char **local_receiver_rdma_metadata;
     char *remote_sender_rdma_metadata;
-
-
     cli_parse(argc, argv, &config);
+
+    ////
+    rdma_config rc;
+    rc.prepare();
+
+
+    ////
 
     local_receiver_rdma_metadata = rdma_prepare(&config, RDMA_RECEIVER);
     if (local_receiver_rdma_metadata == NULL) {
