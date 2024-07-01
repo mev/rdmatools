@@ -18,6 +18,7 @@
 
 #include <endian.h>
 #include <infiniband/verbs.h>
+#include <rdma_track.hpp>
 
     struct rdma_thread_param {
         struct rdma_context *rdma_ctx;
@@ -569,10 +570,11 @@
 
             thread_args->used_size_timed = 0;
         }
-    }
+    }*/
 
     int
-    rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset)
+    rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx,
+            unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset)
     {
         pthread_t *data_thread, *control_thread, *instrumentation_thread;
         struct rdma_thread_param *thread_args;
@@ -606,6 +608,11 @@
         sem_init(thread_args->sem_recv_data, 0, 0);
         pthread_mutex_init(thread_args->backpressure_mutex, NULL);
 
+        #warning receiver_threads not implemented
+        #define receiver_data_thread 0
+        #define receiver_control_thread 0
+        #define receiver_instrumentation_thread 0
+
         if (pthread_create(data_thread, NULL, receiver_data_thread, thread_args) != 0) {
             debug_print("(RDMA_CONSUME) pthread_create() error - data_thread\n");
         }
@@ -637,5 +644,5 @@
         free(thread_args);
 
         return 0;
-    }*/
+    }
 #endif /* RDMA_INFRASTRUCTURE_H */

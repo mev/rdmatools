@@ -15,6 +15,8 @@ add_executable(rdmatools_0_3_ssh
             src/common/rdma_config.hpp
             src/common/rdma_endpoint.hpp
             src/common/rdma_rand.hpp
-            main.cpp )
+
+            src/common/tcpip_client.hpp
+            main.cpp src/common/rdma_track.hpp src/common/rdma_crc.hpp)
 
 target_link_libraries(rdmatools_0_3_ssh pthread ibverbs)

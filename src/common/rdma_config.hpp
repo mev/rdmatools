@@ -5,6 +5,8 @@
 #include "rdma_rand.hpp"
 
 struct rdma_config {
+    std::string usage_scenario;
+
     int function;
 
     const char *local_hostname;
