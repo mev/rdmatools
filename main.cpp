@@ -178,7 +178,7 @@ cli_parse(int argc, char **argv, struct rdma_config* config)
 
 int main(int argc, char** argv)
 {
-    //rdma_crc rcrc;
+    rdma_crc rcrc;
 
     rdma_config rc;
     char **local_receiver_rdma_metadata;
