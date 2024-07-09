@@ -152,18 +152,19 @@ public:
         }
         for (i = 0; i < count; i++) {
             {
-                struct ibv_qp_init_attr init_attr = {
-                        .send_cq = cq[i],
-                        .recv_cq = cq[i],
-                        .cap     = {
-                                .max_send_wr  = RDMA_MAX_SEND_WR,
-                                .max_recv_wr  = RDMA_MAX_RECV_WR,
-                                .max_send_sge = 1,
-                                .max_recv_sge = 1
-                        },
-                        .qp_type = IBV_QPT_RC,
-                        .sq_sig_all = 1
-                };
+                struct ibv_qp_init_attr init_attr;
+                init_attr.send_cq = cq[i];
+                init_attr.recv_cq = cq[i];
+
+                struct ibv_qp_cap capa;
+                capa.max_send_wr  = RDMA_MAX_SEND_WR;
+                capa.max_recv_wr  = RDMA_MAX_RECV_WR;
+                capa.max_send_sge = 1;
+                capa.max_recv_sge = 1;
+
+                init_attr.cap     = capa;
+                init_attr.qp_type = IBV_QPT_RC;
+                init_attr.sq_sig_all = 1;
 
                 qp[i] = ibv_create_qp(pd, &init_attr);
                 if (!qp[i])  {
@@ -173,12 +174,11 @@ public:
             }
 
             {
-                struct ibv_qp_attr attr = {
-                        .qp_state        = IBV_QPS_INIT,
-                        .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE,
-                        .pkey_index      = 0,
-                        .port_num        = static_cast<uint8_t>(port)
-                };
+                struct ibv_qp_attr attr;
+                attr.qp_state        = IBV_QPS_INIT;
+                attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE;
+                attr.pkey_index      = 0;
+                attr.port_num        = static_cast<uint8_t>(port);
 
                 if (ibv_modify_qp(qp[i], &attr,
                                   IBV_QP_STATE              |
@@ -239,21 +239,21 @@ public:
         int i;
 
         for (i = 0; i < count; i++) {
-            struct ibv_qp_attr attr = {
-                    .qp_state           = IBV_QPS_RTR,
-                    .path_mtu           = mtu,
-                    .rq_psn             = remote_endpoint[i]->psn,
-                    .dest_qp_num        = remote_endpoint[i]->qpn,
-                    .ah_attr			= {
-                            .dlid           = remote_endpoint[i]->lid,
-                            .sl             = 0,
-                            .src_path_bits  = 0,
-                            .is_global      = 0,
-                            .port_num       = static_cast<uint8_t>(port)
-                    },
-                    .max_dest_rd_atomic	= 1,
-                    .min_rnr_timer      = 12
-            };
+            struct ibv_qp_attr attr;
+            attr.qp_state           = IBV_QPS_RTR;
+            attr.path_mtu           = mtu;
+            attr.rq_psn             = remote_endpoint[i]->psn;
+            attr.dest_qp_num        = remote_endpoint[i]->qpn;
+            attr.max_dest_rd_atomic	= 1;
+            attr.min_rnr_timer      = 12;
+
+            struct ibv_ah_attr ahattr;
+            ahattr.dlid           = remote_endpoint[i]->lid;
+            ahattr.sl             = 0;
+            ahattr.src_path_bits  = 0;
+            ahattr.is_global      = 0;
+            ahattr.port_num       = static_cast<uint8_t>(port);
+            attr.ah_attr			= ahattr;
 
             if (remote_endpoint[i]->gid.global.interface_id) {
                 attr.ah_attr.is_global      = 1;
