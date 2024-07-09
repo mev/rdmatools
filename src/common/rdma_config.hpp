@@ -40,8 +40,8 @@ public:
         memset(remote_sender_rdma_metadata, 0, 53);
 
         fgets(remote_sender_rdma_metadata, 53, stdin);
-        sscanf(remote_sender_rdma_metadata, "%0lx:%0lx:%0lx:%s\n", &((*(remote_endpoint))->lid), &((*(remote_endpoint))->qpn),
-               &((*(remote_endpoint))->psn), &((*(remote_endpoint))->gid_string));
+        sscanf(remote_sender_rdma_metadata, "%hx:%x:%x:%s\n", &((*(remote_endpoint))->lid), &((*(remote_endpoint))->qpn),
+               &((*(remote_endpoint))->psn), (char*)&((*(remote_endpoint))->gid_string));
         return remote_sender_rdma_metadata;
     }
 

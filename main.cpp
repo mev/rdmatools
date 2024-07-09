@@ -13,7 +13,7 @@
 #include <rdma_infrastructure.hpp>
 #include <tcpip_client.hpp>
 #include <rdma_crc.hpp>
-
+#include <inttypes.h>
 
 /* Options. */
 unsigned int backpressure_threshold_up = 90;
@@ -228,7 +228,7 @@ int main(int argc, char** argv)
         memset(remote_sender_rdma_metadata, 0, 52);
 
         read(client.getHandle(), remote_sender_rdma_metadata, 52);
-        sscanf(remote_sender_rdma_metadata, "%0lx:%0lx:%0lx:%s", &((*(rc.remote_endpoint))->lid), &((*(rc.remote_endpoint))->qpn), &((*(rc.remote_endpoint))->psn), &((*(rc.remote_endpoint))->gid_string));
+        sscanf(remote_sender_rdma_metadata, "%hx:%x:%x:%s", &((*(rc.remote_endpoint))->lid), &((*(rc.remote_endpoint))->qpn), &((*(rc.remote_endpoint))->psn), &((*(rc.remote_endpoint))->gid_string));
         rdma_utils::wire_gid_to_gid((*(rc.remote_endpoint))->gid_string, &((*(rc.remote_endpoint))->gid));
 
         fprintf(stdout, "(RDMA_RECEIVER) [SECOND] remote RDMA metadata: %s\n", remote_sender_rdma_metadata);
@@ -243,7 +243,7 @@ int main(int argc, char** argv)
             exit(1);
         }
 
-        printf("rdma_receiver_sw_stream_tcpiop_full 3: buffer addr: %d\n", rc.rdma_ctx->buf);
+        printf("rdma_receiver_sw_stream_tcpiop_full 3: buffer addr: 0x%016" PRIXPTR "\n", (uintptr_t)rc.rdma_ctx->buf);
 
         if (rdma_consume(client.getHandle(), backpressure_threshold_up, backpressure_threshold_down, rc.rdma_ctx, rc.message_count, rc.message_size, rc.buffer_size, rc.mem_offset) < 0) {
             fprintf(stderr, "main: Failed to consume incoming data.\n");
