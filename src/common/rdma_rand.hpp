@@ -11,5 +11,5 @@ struct rdma_rand {
         }
     }
 
-    auto getrand() { return rand();}
+    int getrand() { return rand();}
 };

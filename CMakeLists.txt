@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(rdmatools_0_3_ssh)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 
 include_directories(src)
 include_directories(src/apps)

@@ -132,7 +132,7 @@ public:
         }
     }
 
-    auto rdma_disconnect() {
+    int rdma_disconnect() {
         return rdma_context::rdma_close_ctx(rdma_ctx, remote_count);
     }
 };
