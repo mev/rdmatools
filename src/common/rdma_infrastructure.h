@@ -31,6 +31,7 @@
 // #define RDMA_MAX_RECV_WR (160)
 #define RDMA_MAX_SEND_WR (8192)
 #define RDMA_MAX_RECV_WR (8192)
+#define READY 111
 
 
 enum rdma_role {
@@ -75,6 +76,8 @@ struct rdma_thread_param {
     unsigned long message_size;
     unsigned long buffer_size;
     unsigned long mem_offset;
+    unsigned long mem_offset_produce;
+    unsigned long mem_offset_consume;
     unsigned long used_size;
     unsigned long used_size_timed;
     unsigned long received_size;
@@ -86,8 +89,15 @@ struct rdma_thread_param {
 
     long int start_ts;
 
-    sem_t *sem_recv_data;
+    unsigned worker_count;
+    unsigned worker_id;
+    unsigned got_data;
+
     pthread_mutex_t *backpressure_mutex;
+
+    pthread_mutex_t cond_lock;
+    pthread_cond_t start_work;
+    pthread_barrier_t workers_done_barrier;
 
     int client_id;
     int stream;
@@ -123,6 +133,7 @@ struct rdma_config {
     const char *remote_hostname;
     unsigned remote_port;
 
+    uint32_t worker_count;
     char *ib_devname;
     uint32_t gidx;
     enum ibv_mtu mtu;
@@ -155,6 +166,7 @@ int rdma_close_ctx(struct rdma_context *ctx, unsigned count);
 int rdma_post_send(struct rdma_context *ctx, struct rdma_endpoint **remote_endpoint, unsigned long *message_count, unsigned long *message_size, unsigned long *mem_offset, unsigned count);
 int rdma_post_send_mt(struct rdma_context *ctx, struct rdma_endpoint **remote_endpoint, unsigned long *message_count, unsigned long *message_size, unsigned long *mem_offset, unsigned count);
 int rdma_post_send_mt_stream(int *control_socket_list, struct rdma_context *ctx, struct rdma_endpoint **remote_endpoint, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset, unsigned count);
-int rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset);
+int rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset, unsigned worker_count);
+int rdma_consume_tstream(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset, unsigned worker_count);
 
 #endif /* RDMA_INFRASTRUCTURE_H */

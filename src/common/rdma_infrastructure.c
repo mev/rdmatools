@@ -202,6 +202,8 @@ rdma_init_ctx(struct ibv_device *ib_dev, unsigned long *message_count, unsigned 
         if (!*(ctx->buf + i)) {
             fprintf(stderr, "rdma_init_ctx: Couldn't allocate work buffer #%d out of %d.\n", i + 1, count);
             goto clean_ctx;
+        } else {
+            bzero(*(ctx->buf + i), *(ctx->size + i));
         }
     }
 
@@ -970,7 +972,9 @@ client_thread(void *arg)
 
             timestamp_ns_thread_cpu_now = get_current_timestamp_ns_thread_cpu();
 
-            debug_print("t1:%d:%ld:%ld:%lu\n", thread_args->client_id, timestamp_ns, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
+            printf("t1:%d:%ld:%ld:%lu\n", thread_args->client_id, timestamp_ns, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
+            // debug_print("t1:%d:%ld:%ld:%lu\n", thread_args->client_id, timestamp_ns, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
+            debug_print("t1:%d:%ld\n", thread_args->client_id, timestamp_ns);
 
             if (!thread_args->stream) {
                 break;
@@ -1130,92 +1134,336 @@ rdma_post_send_mt_stream(int *control_socket_list, struct rdma_context *ctx, str
 }
 
 void *
-receiver_data_thread(void *arg)
+receiver_work_thread(void *arg)
 {
-    int i, sval;
     char buf[32];
     char *devnull;
-    unsigned long chunk_size;
+    unsigned long chunk_size, work_size, work_start_offset, work_end_offset;
     unsigned int new_mem_offset_total;
     unsigned int new_mem_offset_circular;
     long int timestamp_ns;
     long int crt = 0;
+    unsigned local_worker_id;
+
+    // // debug received data
+    // FILE *f;
+    // char *filename;
 
     struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
 
+	pthread_mutex_lock(&(thread_args->cond_lock));
+    local_worker_id = thread_args->worker_id++;
+	pthread_mutex_unlock(&(thread_args->cond_lock));
+
+    devnull = (char *)malloc(thread_args->message_count * thread_args->message_size);
+    bzero(devnull, thread_args->message_count * thread_args->message_size);
+
     while (1) {
-        sem_wait(thread_args->sem_recv_data);
-
-        sem_getvalue(thread_args->sem_recv_data, &sval);
-
         timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
+        // printf("d1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
 
-        // printf("receiver_data_thread: semaphore value: %d\n", sval);
-        printf("d1:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), sval);
+		pthread_barrier_wait(&(thread_args->workers_done_barrier));
 
-        // printf("receiver_data_thread: used size: %d\n", thread_args->used_size);
-        printf("d2:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
+        // printf("db1[%ld]\n", local_worker_id);
+        // printf("db1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
 
-        // Print data in the reserved memory when the sem_recv_data semaphore unlocks, meaning that data has been received
-        devnull = (char *)malloc(thread_args->received_size);
+		pthread_mutex_lock(&(thread_args->cond_lock));
+		while(thread_args->mem_offset_produce == thread_args->mem_offset_consume) {
+			pthread_cond_wait(&(thread_args->start_work), &(thread_args->cond_lock));
+        }
+
+        // printf("dw[%ld]\n", local_worker_id);
+        // printf("dw1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
+
+		// if(thread_args->got_work == READY){
+		// 	pthread_mutex_unlock(&(thread_args->cond_lock));
+		// 	return NULL; //finish thread	
+		// }
+
         chunk_size = thread_args->received_size;
-        // chunk_size = thread_args->message_count * thread_args->message_size;
-        // if (chunk_size > thread_args->used_size) {
-        //     chunk_size = thread_args->used_size;
-        // }
-
-        // printf("receiver_data_thread: last transfer - received %d bytes\n", thread_args->received_size);
-        new_mem_offset_total = thread_args->mem_offset + chunk_size;
+        new_mem_offset_total = thread_args->mem_offset_consume + chunk_size;
         new_mem_offset_circular = new_mem_offset_total % thread_args->buffer_size;
-        // printf("receiver_data_thread: buffer addr: %d\n", (char *)(*thread_args->rdma_ctx->buf));
-        // printf("receiver_data_thread: buffer offset: %d\n", thread_args->mem_offset);
-        // printf("receiver_data_thread: buffer addr + offset: %d %d %d\n", (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, (char *)(*thread_args->rdma_ctx->buf), thread_args->mem_offset);
-        // if (new_mem_offset_total > thread_args->buffer_size) {
-        //     // printf("taped together\n");
-        //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size - new_mem_offset_circular);
-        //     // for (i = 0; i < chunk_size - new_mem_offset_circular; i++) {
-        //     //     printf("%d:", *(devnull + i));
-        //     // }
-        //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf), new_mem_offset_circular);
-        //     // for (i = 0; i < new_mem_offset_circular; i++) {
-        //     //     printf("%d:", *(devnull + i));
-        //     // }
-        //     // printf("\n");
-        // } else {
-        //     // printf("single chunk\n");
-        //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size);
-        //     // for (i = 0; i < chunk_size; i++) {
-        //     //     printf("%d:", *(devnull + i));
-        //     // }
-        //     // printf("\n");
-        // }
-        thread_args->mem_offset = new_mem_offset_circular;
-        thread_args->used_size -= chunk_size;
-        // printf("\nreceiver_data_thread: finished processing %d bytes chunk\n", chunk_size);
+		pthread_mutex_unlock(&(thread_args->cond_lock));
 
-        // usleep(50);
+        // work being done
+        // devnull = (char *)malloc(thread_args->received_size);
+        // bzero(devnull, thread_args->received_size);
+
+        work_size = chunk_size / thread_args->worker_count;
+        work_start_offset = local_worker_id * work_size;
+        work_end_offset = (local_worker_id + 1) * work_size;
+        if (local_worker_id == thread_args->worker_count - 1) {
+            if (work_end_offset < chunk_size) {
+                work_end_offset = chunk_size;
+                work_size = work_end_offset - work_start_offset;
+            }
+        }
+
+        // memcpy(devnull, (*thread_args->rdma_ctx->buf) + thread_args->mem_offset_consume + work_start_offset, work_size);
+
+        // printf("d5[%ld]:%ld:%ld:%lu\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000), work_size);
+
+        // filename = malloc(15);
+        // bzero(filename, 15);
+        // sprintf(filename, "MSG%07d.log", crt);
+
+        // f = fopen(filename, "w");
+        
+        // fprintf(f, "%s", devnull);
+
+        // free(filename);
+        // fclose(f);
+
+        // free(devnull);
+        // work done
+
+		pthread_barrier_wait(&(thread_args->workers_done_barrier));
+
+        // printf("db2[%ld]\n", local_worker_id);
+        // printf("db2[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
+
+        if (local_worker_id == 0) {
+            unsigned long used_size;
+
+            pthread_mutex_lock(&(thread_args->cond_lock));
+            // thread_args->got_work = 0;
+            thread_args->mem_offset_consume = new_mem_offset_circular;
+            thread_args->used_size -= chunk_size;
+            if (thread_args->mem_offset_produce >= thread_args->mem_offset_consume) {
+                used_size = thread_args->mem_offset_produce - thread_args->mem_offset_consume;
+            } else {
+                used_size = thread_args->buffer_size + thread_args->mem_offset_produce - thread_args->mem_offset_consume;
+            }
+            pthread_mutex_unlock(&(thread_args->cond_lock));
+
+            // printf("receiver_work_thread: new used size: %d\n", thread_args->used_size);
+            printf("d3:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), used_size);
+
+            bzero(buf, 32);
+            sprintf(buf, "GO:%ld", crt);
+            // pthread_mutex_lock(thread_args->backpressure_mutex);
+            if (thread_args->backpressure == 1 && used_size < (thread_args->buffer_size * thread_args->backpressure_threshold_down / 100)) {
+                write(thread_args->control_socket, buf, 32);
+                thread_args->backpressure = 0;
+                // printf("receiver_work_thread: backpressure change: GO\n");
+                printf("d4:%ld:%ld:%d:%ld\n", timestamp_ns, (timestamp_ns / 1000000), 1, crt++);
+            } else if (thread_args->backpressure == 0) {
+                // printf("receiver_work_thread: backpressure already on: GO\n");
+                printf("d4:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), 0);
+            }
+            // pthread_mutex_unlock(thread_args->backpressure_mutex);
+        }
+    }
+
+    free(devnull);
+}
+
+void *
+receiver_work_thread_tstream(void *arg)
+{
+    char buf[32];
+    char *devnull;
+    unsigned long chunk_size, work_size, work_start_offset, work_end_offset;
+    unsigned int new_mem_offset_total;
+    unsigned int new_mem_offset_circular;
+    long int timestamp_ns;
+    long int crt = 0;
+    unsigned local_worker_id;
+
+    // debug received data
+    FILE *f;
+    char *filename;
+
+    struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
+
+	pthread_mutex_lock(&(thread_args->cond_lock));
+    local_worker_id = thread_args->worker_id++;
+	pthread_mutex_unlock(&(thread_args->cond_lock));
+
+    // devnull = (char *)malloc(thread_args->message_count * thread_args->message_size);
+    // bzero(devnull, thread_args->message_count * thread_args->message_size);
+
+    while (1) {
+        timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
+        printf("d1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
+
+		pthread_barrier_wait(&(thread_args->workers_done_barrier));
+
+        printf("db1[%ld]\n", local_worker_id);
+
+		pthread_mutex_lock(&(thread_args->cond_lock));
+		while(thread_args->mem_offset_produce == thread_args->mem_offset_consume) {
+			pthread_cond_wait(&(thread_args->start_work), &(thread_args->cond_lock));
+        }
+
+        printf("dw[%ld]\n", local_worker_id);
+
+		// if(thread_args->got_work == READY){
+		// 	pthread_mutex_unlock(&(thread_args->cond_lock));
+		// 	return NULL; //finish thread	
+		// }
+
+        chunk_size = thread_args->received_size * thread_args->message_size;
+        new_mem_offset_total = thread_args->mem_offset_consume + chunk_size;
+        new_mem_offset_circular = new_mem_offset_total % thread_args->buffer_size;
+		pthread_mutex_unlock(&(thread_args->cond_lock));
+
+        // work starts being done
+        work_size = chunk_size / thread_args->worker_count;
+        work_start_offset = local_worker_id * work_size;
+        work_end_offset = (local_worker_id + 1) * work_size;
+        if (local_worker_id == thread_args->worker_count - 1) {
+            if (work_end_offset < chunk_size) {
+                work_end_offset = chunk_size;
+                work_size = work_end_offset - work_start_offset;
+            }
+        }
+
+        devnull = (char *)malloc(work_size);
+        bzero(devnull, work_size);
+        memcpy(devnull, (*thread_args->rdma_ctx->buf) + thread_args->mem_offset_consume + work_start_offset, work_size);
+
+        printf("d5[%ld]:%ld:%ld:%lu\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000), work_size);
+
+        filename = malloc(15);
+        bzero(filename, 15);
+        sprintf(filename, "MSG%07d.log", crt);
+
+        f = fopen(filename, "w");
+        
+        fprintf(f, "%s", devnull);
+
+        free(filename);
+        fclose(f);
 
         free(devnull);
-        // End of data check
+        // work done
 
-        // printf("receiver_data_thread: new used size: %d\n", thread_args->used_size);
-        printf("d3:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
+		pthread_barrier_wait(&(thread_args->workers_done_barrier));
 
-        bzero(buf, 32);
-        sprintf(buf, "GO:%ld", crt);
-        // pthread_mutex_lock(thread_args->backpressure_mutex);
-        if (thread_args->backpressure == 1 && thread_args->used_size < (thread_args->buffer_size * thread_args->backpressure_threshold_down / 100)) {
-            write(thread_args->control_socket, buf, 32);
-            thread_args->backpressure = 0;
-            // printf("receiver_data_thread: backpressure change: GO\n");
-            printf("d4:%ld:%ld:%d:%ld\n", timestamp_ns, (timestamp_ns / 1000000), 1, crt++);
-        } else if (thread_args->backpressure == 0) {
-            // printf("receiver_control_thread: backpressure already on: GO\n");
-            printf("d4:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), 0);
+        printf("db2[%ld]\n", local_worker_id);
+
+        if (local_worker_id == 0) {
+            unsigned long used_size;
+
+            pthread_mutex_lock(&(thread_args->cond_lock));
+            // thread_args->got_work = 0;
+            thread_args->mem_offset_consume = new_mem_offset_circular;
+            thread_args->used_size -= chunk_size;
+            if (thread_args->mem_offset_produce >= thread_args->mem_offset_consume) {
+                used_size = thread_args->mem_offset_produce - thread_args->mem_offset_consume;
+            } else {
+                used_size = thread_args->buffer_size + thread_args->mem_offset_produce - thread_args->mem_offset_consume;
+            }
+            pthread_mutex_unlock(&(thread_args->cond_lock));
+
+            // printf("receiver_work_thread: new used size: %d\n", thread_args->used_size);
+            printf("d3:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), used_size);
+
+            bzero(buf, 32);
+            sprintf(buf, "GO:%ld", crt);
+            // pthread_mutex_lock(thread_args->backpressure_mutex);
+            if (thread_args->backpressure == 1 && used_size < (thread_args->buffer_size * thread_args->backpressure_threshold_down / 100)) {
+                write(thread_args->control_socket, buf, 32);
+                thread_args->backpressure = 0;
+                // printf("receiver_work_thread: backpressure change: GO\n");
+                printf("d4:%ld:%ld:%d:%ld\n", timestamp_ns, (timestamp_ns / 1000000), 1, crt++);
+            } else if (thread_args->backpressure == 0) {
+                // printf("receiver_work_thread: backpressure already on: GO\n");
+                printf("d4:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), 0);
+            }
+            // pthread_mutex_unlock(thread_args->backpressure_mutex);
         }
-        // pthread_mutex_unlock(thread_args->backpressure_mutex);
     }
+
+    free(devnull);
 }
+
+// void *
+// receiver_data_thread(void *arg)
+// {
+//     int i, sval;
+//     char buf[32];
+//     char *devnull;
+//     unsigned long chunk_size;
+//     unsigned int new_mem_offset_total;
+//     unsigned int new_mem_offset_circular;
+//     long int timestamp_ns;
+//     long int crt = 0;
+
+//     struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
+
+//     while (1) {
+//         // BLOCK
+
+//         timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
+
+//         // printf("receiver_data_thread: semaphore value: %d\n", sval);
+//         printf("d1:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), sval);
+
+//         // printf("receiver_data_thread: used size: %d\n", thread_args->used_size);
+//         printf("d2:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
+
+//         // Print data in the reserved memory when the sem_recv_data semaphore unlocks, meaning that data has been received
+//         devnull = (char *)malloc(thread_args->received_size);
+//         chunk_size = thread_args->received_size;
+//         // chunk_size = thread_args->message_count * thread_args->message_size;
+//         // if (chunk_size > thread_args->used_size) {
+//         //     chunk_size = thread_args->used_size;
+//         // }
+
+//         // printf("receiver_data_thread: last transfer - received %d bytes\n", thread_args->received_size);
+//         new_mem_offset_total = thread_args->mem_offset + chunk_size;
+//         new_mem_offset_circular = new_mem_offset_total % thread_args->buffer_size;
+//         // printf("receiver_data_thread: buffer addr: %d\n", (char *)(*thread_args->rdma_ctx->buf));
+//         // printf("receiver_data_thread: buffer offset: %d\n", thread_args->mem_offset);
+//         // printf("receiver_data_thread: buffer addr + offset: %d %d %d\n", (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, (char *)(*thread_args->rdma_ctx->buf), thread_args->mem_offset);
+//         // if (new_mem_offset_total > thread_args->buffer_size) {
+//         //     // printf("taped together\n");
+//         //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size - new_mem_offset_circular);
+//         //     // for (i = 0; i < chunk_size - new_mem_offset_circular; i++) {
+//         //     //     printf("%d:", *(devnull + i));
+//         //     // }
+//         //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf), new_mem_offset_circular);
+//         //     // for (i = 0; i < new_mem_offset_circular; i++) {
+//         //     //     printf("%d:", *(devnull + i));
+//         //     // }
+//         //     // printf("\n");
+//         // } else {
+//         //     // printf("single chunk\n");
+//         //     memcpy(devnull, (char *)(*thread_args->rdma_ctx->buf) + thread_args->mem_offset, chunk_size);
+//         //     // for (i = 0; i < chunk_size; i++) {
+//         //     //     printf("%d:", *(devnull + i));
+//         //     // }
+//         //     // printf("\n");
+//         // }
+//         thread_args->mem_offset = new_mem_offset_circular;
+//         thread_args->used_size -= chunk_size;
+//         // printf("\nreceiver_data_thread: finished processing %d bytes chunk\n", chunk_size);
+
+//         // usleep(50);
+
+//         free(devnull);
+//         // End of data check
+
+//         // printf("receiver_data_thread: new used size: %d\n", thread_args->used_size);
+//         printf("d3:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
+
+//         bzero(buf, 32);
+//         sprintf(buf, "GO:%ld", crt);
+//         // pthread_mutex_lock(thread_args->backpressure_mutex);
+//         if (thread_args->backpressure == 1 && thread_args->used_size < (thread_args->buffer_size * thread_args->backpressure_threshold_down / 100)) {
+//             write(thread_args->control_socket, buf, 32);
+//             thread_args->backpressure = 0;
+//             // printf("receiver_data_thread: backpressure change: GO\n");
+//             printf("d4:%ld:%ld:%d:%ld\n", timestamp_ns, (timestamp_ns / 1000000), 1, crt++);
+//         } else if (thread_args->backpressure == 0) {
+//             // printf("receiver_data_thread: backpressure already on: GO\n");
+//             printf("d4:%ld:%ld:%d\n", timestamp_ns, (timestamp_ns / 1000000), 0);
+//         }
+//         // pthread_mutex_unlock(thread_args->backpressure_mutex);
+//     }
+// }
 
 void *
 receiver_control_thread(void *arg)
@@ -1225,6 +1473,7 @@ receiver_control_thread(void *arg)
     int backpressure = 0, backpressure_change = 0;
     long int timestamp_ns;
     long int crt = 0;
+    unsigned long used_size;
 
     struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
 
@@ -1239,19 +1488,41 @@ receiver_control_thread(void *arg)
         if (end == buf) {
             debug_print("receiver_control_thread: failed to convert received string \"%s\" to unsigned int\n", buf);
         }
+        printf("c0:%ld:%ld:%s\n", timestamp_ns, (timestamp_ns / 1000000), buf);
         // debug_print("receiver_control_thread: received bytes: %d\n", thread_args->received_size);
+        // pthread_mutex_lock(&(thread_args->cond_lock));
+        // // wait while the previous chunk is still being processed and move forward only when that is done
+		// while(thread_args->got_work == 1) {
+		// 	pthread_cond_wait(&(thread_args->start_work), &(thread_args->cond_lock));
+        // }
+		pthread_mutex_lock(&(thread_args->cond_lock));
+        thread_args->mem_offset_produce += thread_args->received_size;
+        if (thread_args->mem_offset_produce >= thread_args->buffer_size) {
+            thread_args->mem_offset_produce %= thread_args->buffer_size;
+        }
         thread_args->used_size += thread_args->received_size;
         thread_args->used_size_timed += thread_args->received_size;
 
-        // printf("receiver_control_thread: new used size: %d\n", thread_args->used_size);
-        printf("c1:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), thread_args->used_size);
+        // thread_args->got_work = 1; // start processing new chunk
+		// if(thread_args->mem_offset_produce != thread_args->mem_offset_consume) {
+            pthread_cond_broadcast(&(thread_args->start_work));
+        // }
 
-        sem_post(thread_args->sem_recv_data);
+        if (thread_args->mem_offset_produce >= thread_args->mem_offset_consume) {
+            used_size = thread_args->mem_offset_produce - thread_args->mem_offset_consume;
+        } else {
+            used_size = thread_args->buffer_size + thread_args->mem_offset_produce - thread_args->mem_offset_consume;
+        }
+        // printf("c3:%lu:%lu:%lu\n", thread_args->buffer_size, thread_args->mem_offset_produce, thread_args->mem_offset_consume);
+   		pthread_mutex_unlock(&(thread_args->cond_lock));
+
+        // printf("receiver_control_thread: new used size: %d\n", thread_args->used_size);
+        printf("c1:%ld:%ld:%lu\n", timestamp_ns, (timestamp_ns / 1000000), used_size);
 
         bzero(buf, 32);
         sprintf(buf, "WAIT:%ld", crt);
         // pthread_mutex_lock(thread_args->backpressure_mutex);
-        if (thread_args->backpressure == 0 && thread_args->used_size >= (thread_args->buffer_size * thread_args->backpressure_threshold_up / 100)) {
+        if (thread_args->backpressure == 0 && used_size >= (thread_args->buffer_size * thread_args->backpressure_threshold_up / 100)) {
             write(thread_args->control_socket, buf, 32);
             thread_args->backpressure = 1;
             // printf("receiver_control_thread: backpressure change: WAIT\n");
@@ -1295,14 +1566,17 @@ receiver_instrumentation_thread(void *arg)
 }
 
 int
-rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset)
+rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset, unsigned worker_count)
 {
-    pthread_t *data_thread, *control_thread, *instrumentation_thread;
+    // pthread_t *data_thread, *control_thread, *instrumentation_thread, *worker_threads;
+    pthread_t *control_thread, *instrumentation_thread, *worker_threads;
     struct rdma_thread_param *thread_args;
 
-    data_thread = (pthread_t *)malloc(sizeof(pthread_t));
+    // data_thread = (pthread_t *)malloc(sizeof(pthread_t));
     control_thread = (pthread_t *)malloc(sizeof(pthread_t));
     instrumentation_thread = (pthread_t *)malloc(sizeof(pthread_t));
+    worker_threads = (pthread_t *)malloc(worker_count * sizeof(pthread_t));
+
     thread_args = (struct rdma_thread_param *)malloc(sizeof(struct rdma_thread_param));
 
     printf("rdma_consume before: buffer addr: %d\n", ctx->buf);
@@ -1311,7 +1585,9 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
     thread_args->message_count = *message_count;
     thread_args->message_size = *message_size;
     thread_args->buffer_size = *buffer_size;
-    thread_args->mem_offset = *mem_offset;
+    // thread_args->mem_offset = *mem_offset;
+    thread_args->mem_offset_produce = *mem_offset;
+    thread_args->mem_offset_consume = *mem_offset;
     thread_args->used_size = 0;
     thread_args->used_size_timed = 0;
     thread_args->received_size = 0;
@@ -1323,15 +1599,28 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
 
     thread_args->start_ts = get_current_timestamp_ns();
 
-    thread_args->sem_recv_data = (sem_t *)malloc(sizeof(sem_t));
+    thread_args->worker_count = worker_count;
+    thread_args->worker_id = 0;
+    thread_args->got_data = 0;
+    
+    // thread_args->sem_recv_data = (sem_t *)malloc(sizeof(sem_t));
     thread_args->backpressure_mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
 
-    sem_init(thread_args->sem_recv_data, 0, 0);
     pthread_mutex_init(thread_args->backpressure_mutex, NULL);
 
-    if (pthread_create(data_thread, NULL, receiver_data_thread, thread_args) != 0) {
-        debug_print("(RDMA_CONSUME) pthread_create() error - data_thread\n");
+  	pthread_mutex_init(&(thread_args->cond_lock), NULL);
+	pthread_cond_init(&(thread_args->start_work), NULL);
+   	pthread_barrier_init(&(thread_args->workers_done_barrier), NULL, worker_count);
+
+    for (int i = 0; i < worker_count; i++) {
+        if (pthread_create(&(worker_threads[i]), NULL, receiver_work_thread, thread_args) != 0) {
+            debug_print("(RDMA_CONSUME) pthread_create() error - worker_threads[%d]\n", i);
+        }
     }
+
+    // if (pthread_create(data_thread, NULL, receiver_data_thread, thread_args) != 0) {
+    //     debug_print("(RDMA_CONSUME) pthread_create() error - data_thread\n");
+    // }
 
     if (pthread_create(control_thread, NULL, receiver_control_thread, thread_args) != 0) {
         debug_print("(RDMA_CONSUME) pthread_create() error - control_thread\n");
@@ -1341,9 +1630,9 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
         debug_print("(RDMA_CONSUME) pthread_create() error - instrumentation_thread\n");
     }
 
-    if (pthread_join(*data_thread, NULL) != 0) {
-        debug_print("(RDMA_CONSUME) pthread_join() error - data_thread\n");
-    }
+    // if (pthread_join(*data_thread, NULL) != 0) {
+    //     debug_print("(RDMA_CONSUME) pthread_join() error - data_thread\n");
+    // }
 
     if (pthread_join(*control_thread, NULL) != 0) {
         debug_print("(RDMA_CONSUME) pthread_join() error - control_thread\n");
@@ -1355,7 +1644,94 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
 
     pthread_mutex_destroy(thread_args->backpressure_mutex);
 
-    free(thread_args->sem_recv_data);
+    // free(thread_args->sem_recv_data);
+    free(thread_args->backpressure_mutex);
+    free(thread_args);
+
+	return 0;
+}
+
+int
+rdma_consume_tstream(int control_socket, unsigned int backpressure_threshold_up, unsigned int backpressure_threshold_down, struct rdma_context *ctx, unsigned long *message_count, unsigned long *message_size, unsigned long *buffer_size, unsigned long *mem_offset, unsigned worker_count)
+{
+    // pthread_t *data_thread, *control_thread, *instrumentation_thread, *worker_threads;
+    pthread_t *control_thread, *instrumentation_thread, *worker_threads;
+    struct rdma_thread_param *thread_args;
+
+    // data_thread = (pthread_t *)malloc(sizeof(pthread_t));
+    control_thread = (pthread_t *)malloc(sizeof(pthread_t));
+    instrumentation_thread = (pthread_t *)malloc(sizeof(pthread_t));
+    worker_threads = (pthread_t *)malloc(worker_count * sizeof(pthread_t));
+
+    thread_args = (struct rdma_thread_param *)malloc(sizeof(struct rdma_thread_param));
+
+    printf("rdma_consume_tstream before: buffer addr: %d\n", ctx->buf);
+    thread_args->rdma_ctx = ctx;
+    printf("rdma_consume_tstream after: buffer addr: %d\n", thread_args->rdma_ctx->buf);
+    thread_args->message_count = *message_count; // this should be 1
+    printf("rdma_consume_tstream message count: %d (INVALID RESULTS IF not 1)\n", thread_args->message_count);
+    thread_args->message_size = *message_size;
+    thread_args->buffer_size = *buffer_size;
+    // thread_args->mem_offset = *mem_offset;
+    thread_args->mem_offset_produce = *mem_offset;
+    thread_args->mem_offset_consume = *mem_offset;
+    thread_args->used_size = 0;
+    thread_args->used_size_timed = 0;
+    thread_args->received_size = 0;
+
+    thread_args->control_socket = control_socket;
+    thread_args->backpressure = 0;
+    thread_args->backpressure_threshold_up = backpressure_threshold_up;
+    thread_args->backpressure_threshold_down = backpressure_threshold_down;
+
+    thread_args->start_ts = get_current_timestamp_ns();
+
+    thread_args->worker_count = worker_count;
+    thread_args->worker_id = 0;
+    thread_args->got_data = 0;
+    
+    // thread_args->sem_recv_data = (sem_t *)malloc(sizeof(sem_t));
+    thread_args->backpressure_mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+
+    pthread_mutex_init(thread_args->backpressure_mutex, NULL);
+
+  	pthread_mutex_init(&(thread_args->cond_lock), NULL);
+	pthread_cond_init(&(thread_args->start_work), NULL);
+   	pthread_barrier_init(&(thread_args->workers_done_barrier), NULL, worker_count);
+
+    for (int i = 0; i < worker_count; i++) {
+        if (pthread_create(&(worker_threads[i]), NULL, receiver_work_thread_tstream, thread_args) != 0) {
+            debug_print("(RDMA_CONSUME) pthread_create() error - worker_threads[%d]\n", i);
+        }
+    }
+
+    // if (pthread_create(data_thread, NULL, receiver_data_thread, thread_args) != 0) {
+    //     debug_print("(RDMA_CONSUME) pthread_create() error - data_thread\n");
+    // }
+
+    if (pthread_create(control_thread, NULL, receiver_control_thread, thread_args) != 0) {
+        debug_print("(RDMA_CONSUME) pthread_create() error - control_thread\n");
+    }
+
+    if (pthread_create(instrumentation_thread, NULL, receiver_instrumentation_thread, thread_args) != 0) {
+        debug_print("(RDMA_CONSUME) pthread_create() error - instrumentation_thread\n");
+    }
+
+    // if (pthread_join(*data_thread, NULL) != 0) {
+    //     debug_print("(RDMA_CONSUME) pthread_join() error - data_thread\n");
+    // }
+
+    if (pthread_join(*control_thread, NULL) != 0) {
+        debug_print("(RDMA_CONSUME) pthread_join() error - control_thread\n");
+    }
+
+    if (pthread_join(*instrumentation_thread, NULL) != 0) {
+        debug_print("(RDMA_CONSUME) pthread_join() error - instrumentation_thread\n");
+    }
+
+    pthread_mutex_destroy(thread_args->backpressure_mutex);
+
+    // free(thread_args->sem_recv_data);
     free(thread_args->backpressure_mutex);
     free(thread_args);
 
