@@ -1139,8 +1139,8 @@ receiver_work_thread(void *arg)
     char buf[32];
     char *devnull;
     unsigned long chunk_size, work_size, work_start_offset, work_end_offset;
-    unsigned int new_mem_offset_total;
-    unsigned int new_mem_offset_circular;
+    unsigned long new_mem_offset_total;
+    unsigned long new_mem_offset_circular;
     long int timestamp_ns;
     long int crt = 0;
     unsigned local_worker_id;
@@ -1162,7 +1162,7 @@ receiver_work_thread(void *arg)
         timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
         // printf("d1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
 
-		pthread_barrier_wait(&(thread_args->workers_done_barrier));
+		// pthread_barrier_wait(&(thread_args->workers_done_barrier));
 
         // printf("db1[%ld]\n", local_worker_id);
         // printf("db1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
@@ -1180,7 +1180,7 @@ receiver_work_thread(void *arg)
 		// 	return NULL; //finish thread	
 		// }
 
-        chunk_size = thread_args->received_size;
+        chunk_size = thread_args->received_size_fifo[thread_args->head];
         new_mem_offset_total = thread_args->mem_offset_consume + chunk_size;
         new_mem_offset_circular = new_mem_offset_total % thread_args->buffer_size;
 		pthread_mutex_unlock(&(thread_args->cond_lock));
@@ -1199,7 +1199,7 @@ receiver_work_thread(void *arg)
             }
         }
 
-        // memcpy(devnull, (*thread_args->rdma_ctx->buf) + thread_args->mem_offset_consume + work_start_offset, work_size);
+        memcpy(devnull, (*thread_args->rdma_ctx->buf) + thread_args->mem_offset_consume + work_start_offset, work_size);
 
         // printf("d5[%ld]:%ld:%ld:%lu\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000), work_size);
 
@@ -1224,6 +1224,11 @@ receiver_work_thread(void *arg)
 
         if (local_worker_id == 0) {
             unsigned long used_size;
+
+            thread_args->head++;
+            if (thread_args->head >= RECEIVED_FIFO_SIZE) {
+                thread_args->head = 0;
+            }
 
             pthread_mutex_lock(&(thread_args->cond_lock));
             // thread_args->got_work = 0;
@@ -1264,15 +1269,15 @@ receiver_work_thread_tstream(void *arg)
     char buf[32];
     char *devnull;
     unsigned long chunk_size, work_size, work_start_offset, work_end_offset;
-    unsigned int new_mem_offset_total;
-    unsigned int new_mem_offset_circular;
+    unsigned long new_mem_offset_total;
+    unsigned long new_mem_offset_circular;
     long int timestamp_ns;
     long int crt = 0;
     unsigned local_worker_id;
 
-    // debug received data
-    FILE *f;
-    char *filename;
+    // // debug received data
+    // FILE *f;
+    // char *filename;
 
     struct rdma_thread_param *thread_args = (struct rdma_thread_param *)arg;
 
@@ -1285,30 +1290,35 @@ receiver_work_thread_tstream(void *arg)
 
     while (1) {
         timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
-        printf("d1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
+        // printf("d1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
 
-		pthread_barrier_wait(&(thread_args->workers_done_barrier));
+		// pthread_barrier_wait(&(thread_args->workers_done_barrier));
 
-        printf("db1[%ld]\n", local_worker_id);
+        // printf("db1[%ld]\n", local_worker_id);
+        // printf("db1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
 
 		pthread_mutex_lock(&(thread_args->cond_lock));
 		while(thread_args->mem_offset_produce == thread_args->mem_offset_consume) {
 			pthread_cond_wait(&(thread_args->start_work), &(thread_args->cond_lock));
         }
 
-        printf("dw[%ld]\n", local_worker_id);
+        // printf("dw[%ld]\n", local_worker_id);
+        // printf("dw1[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
 
 		// if(thread_args->got_work == READY){
 		// 	pthread_mutex_unlock(&(thread_args->cond_lock));
 		// 	return NULL; //finish thread	
 		// }
 
-        chunk_size = thread_args->received_size * thread_args->message_size;
+        chunk_size = thread_args->received_size_fifo[thread_args->head];
         new_mem_offset_total = thread_args->mem_offset_consume + chunk_size;
         new_mem_offset_circular = new_mem_offset_total % thread_args->buffer_size;
 		pthread_mutex_unlock(&(thread_args->cond_lock));
 
-        // work starts being done
+        // work being done
+        // devnull = (char *)malloc(thread_args->received_size);
+        // bzero(devnull, thread_args->received_size);
+
         work_size = chunk_size / thread_args->worker_count;
         work_start_offset = local_worker_id * work_size;
         work_end_offset = (local_worker_id + 1) * work_size;
@@ -1323,28 +1333,34 @@ receiver_work_thread_tstream(void *arg)
         bzero(devnull, work_size);
         memcpy(devnull, (*thread_args->rdma_ctx->buf) + thread_args->mem_offset_consume + work_start_offset, work_size);
 
-        printf("d5[%ld]:%ld:%ld:%lu\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000), work_size);
+        // printf("d5[%ld]:%ld:%ld:%lu\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000), work_size);
 
-        filename = malloc(15);
-        bzero(filename, 15);
-        sprintf(filename, "MSG%07d.log", crt);
+        // filename = malloc(15);
+        // bzero(filename, 15);
+        // sprintf(filename, "MSG%07d.log", crt);
 
-        f = fopen(filename, "w");
+        // f = fopen(filename, "w");
         
-        fprintf(f, "%s", devnull);
+        // fprintf(f, "%s", devnull);
 
-        free(filename);
-        fclose(f);
+        // free(filename);
+        // fclose(f);
 
-        free(devnull);
+        // free(devnull);
         // work done
 
 		pthread_barrier_wait(&(thread_args->workers_done_barrier));
 
-        printf("db2[%ld]\n", local_worker_id);
+        // printf("db2[%ld]\n", local_worker_id);
+        // printf("db2[%ld]:%ld:%ld\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000));
 
         if (local_worker_id == 0) {
             unsigned long used_size;
+
+            thread_args->head++;
+            if (thread_args->head >= RECEIVED_FIFO_SIZE) {
+                thread_args->head = 0;
+            }
 
             pthread_mutex_lock(&(thread_args->cond_lock));
             // thread_args->got_work = 0;
@@ -1484,7 +1500,13 @@ receiver_control_thread(void *arg)
 
         timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
 
-        thread_args->received_size = strtol(buf, &end, 0);
+        // thread_args->received_size = strtoul(buf, &end, 0);
+        thread_args->received_size_fifo[thread_args->tail] = strtoul(buf, &end, 0);
+        thread_args->received_size = thread_args->received_size_fifo[thread_args->tail];
+        thread_args->tail++;
+        if (thread_args->tail >= RECEIVED_FIFO_SIZE) {
+            thread_args->tail = 0;
+        }
         if (end == buf) {
             debug_print("receiver_control_thread: failed to convert received string \"%s\" to unsigned int\n", buf);
         }
@@ -1602,6 +1624,11 @@ rdma_consume(int control_socket, unsigned int backpressure_threshold_up, unsigne
     thread_args->worker_count = worker_count;
     thread_args->worker_id = 0;
     thread_args->got_data = 0;
+
+    bzero(thread_args->received_size_fifo, RECEIVED_FIFO_SIZE);
+    thread_args->fifo_size = RECEIVED_FIFO_SIZE;
+    thread_args->head = 0;
+    thread_args->tail = 0;
     
     // thread_args->sem_recv_data = (sem_t *)malloc(sizeof(sem_t));
     thread_args->backpressure_mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
@@ -1689,6 +1716,11 @@ rdma_consume_tstream(int control_socket, unsigned int backpressure_threshold_up,
     thread_args->worker_count = worker_count;
     thread_args->worker_id = 0;
     thread_args->got_data = 0;
+
+    bzero(thread_args->received_size_fifo, RECEIVED_FIFO_SIZE);
+    thread_args->fifo_size = RECEIVED_FIFO_SIZE;
+    thread_args->head = 0;
+    thread_args->tail = 0;
     
     // thread_args->sem_recv_data = (sem_t *)malloc(sizeof(sem_t));
     thread_args->backpressure_mutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));

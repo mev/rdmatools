@@ -32,6 +32,7 @@
 #define RDMA_MAX_SEND_WR (8192)
 #define RDMA_MAX_RECV_WR (8192)
 #define READY 111
+#define RECEIVED_FIFO_SIZE 2048
 
 
 enum rdma_role {
@@ -101,6 +102,9 @@ struct rdma_thread_param {
 
     int client_id;
     int stream;
+
+    unsigned received_size_fifo[RECEIVED_FIFO_SIZE];
+    short fifo_size, head, tail;
 };
 
 struct linked_list_node {
