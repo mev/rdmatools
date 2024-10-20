@@ -972,9 +972,9 @@ client_thread(void *arg)
 
             timestamp_ns_thread_cpu_now = get_current_timestamp_ns_thread_cpu();
 
-            printf("t1:%d:%ld:%ld:%lu\n", thread_args->client_id, timestamp_ns, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
             // debug_print("t1:%d:%ld:%ld:%lu\n", thread_args->client_id, timestamp_ns, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
             debug_print("t1:%d:%ld\n", thread_args->client_id, timestamp_ns);
+            printf("t1:%d:%ld:%ld:%lu\n", thread_args->client_id, timestamp_ns, timestamp_ns_thread_cpu_now - timestamp_ns_thread_cpu_start, chunk_size);
 
             if (!thread_args->stream) {
                 break;
