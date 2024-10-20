@@ -1268,7 +1268,11 @@ receiver_work_thread_tstream(void *arg)
 {
     char buf[32];
     char *devnull;
-    unsigned long chunk_size, work_size, work_start_offset, work_end_offset;
+    unsigned long chunk_size, work_size, work_size_partial, work_start_offset, work_end_offset;
+    unsigned long worker_start_offset_consume;
+    unsigned long worker_start_offset_consume_circular;
+    unsigned long worker_end_offset_consume;
+    // unsigned long worker_end_offset_consume_circular;
     unsigned long new_mem_offset_total;
     unsigned long new_mem_offset_circular;
     long int timestamp_ns;
@@ -1285,8 +1289,8 @@ receiver_work_thread_tstream(void *arg)
     local_worker_id = thread_args->worker_id++;
 	pthread_mutex_unlock(&(thread_args->cond_lock));
 
-    // devnull = (char *)malloc(thread_args->message_count * thread_args->message_size);
-    // bzero(devnull, thread_args->message_count * thread_args->message_size);
+    devnull = (char *)malloc(150000 * thread_args->message_size);
+    bzero(devnull, 150000 * thread_args->message_size);
 
     while (1) {
         timestamp_ns = get_current_timestamp_ns() - thread_args->start_ts;
@@ -1328,10 +1332,24 @@ receiver_work_thread_tstream(void *arg)
                 work_size = work_end_offset - work_start_offset;
             }
         }
+        worker_start_offset_consume = thread_args->mem_offset_consume + work_start_offset;
+        worker_start_offset_consume_circular = worker_start_offset_consume % thread_args->buffer_size;
+        worker_end_offset_consume = thread_args->mem_offset_consume + work_end_offset;
+        // worker_end_offset_consume_circular = worker_end_offset_consume % thread_args->buffer_size;
 
-        devnull = (char *)malloc(work_size);
-        bzero(devnull, work_size);
-        memcpy(devnull, (*thread_args->rdma_ctx->buf) + thread_args->mem_offset_consume + work_start_offset, work_size);
+        // devnull = (char *)malloc(work_size);
+        // bzero(devnull, work_size);
+        if (worker_end_offset_consume <= thread_args->buffer_size) {
+            memcpy(devnull, (*thread_args->rdma_ctx->buf) + worker_start_offset_consume, work_size);
+        } else if (worker_start_offset_consume > thread_args->buffer_size) {
+            memcpy(devnull, (*thread_args->rdma_ctx->buf) + worker_start_offset_consume_circular, work_size);
+        } else {
+            work_size_partial = thread_args->buffer_size - worker_start_offset_consume;
+            memcpy(devnull, (*thread_args->rdma_ctx->buf) + worker_start_offset_consume, work_size_partial);
+            work_size -= work_size_partial;
+            memcpy(devnull, (*thread_args->rdma_ctx->buf), work_size);
+        }
+        // free(devnull);
 
         // printf("d5[%ld]:%ld:%ld:%lu\n", local_worker_id, timestamp_ns, (timestamp_ns / 1000000), work_size);
 
